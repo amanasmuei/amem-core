@@ -112,10 +112,14 @@ export {
   syncFromClaude,
   exportForTeam,
   importFromTeam,
+  syncToCopilot,
+  generateCopilotInstructions,
   type SyncResult,
   type TeamExportOptions,
   type TeamImportOptions,
   type TeamImportResult,
+  type CopilotSyncOptions,
+  type CopilotSyncResult,
 } from "./sync.js";
 
 // ── Auto-Relate ─────────────────────────────────────
