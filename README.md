@@ -102,6 +102,26 @@ Merge duplicates, prune stale memories, promote frequently accessed ones, decay 
 
 Generate a 384-dim embedding vector using bge-small-en-v1.5 (local, no API keys). Returns `null` if the model is not yet available.
 
+### `syncFromClaude(db, projectFilter?, dryRun?): Promise<SyncResult>`
+
+Import Claude Code auto-memory files (`~/.claude/projects/*/memory/*.md`) into amem. Auto-maps Claude types to amem types, deduplicates by content hash.
+
+### `syncToCopilot(db, opts?): CopilotSyncResult`
+
+Export amem memories to `.github/copilot-instructions.md`. Generates structured markdown grouped by type (corrections, decisions, preferences, patterns), wrapped in `<!-- amem:start/end -->` markers. Preserves existing non-amem content.
+
+```ts
+import { createDatabase, syncToCopilot } from "@aman_asmuei/amem-core";
+
+const db = createDatabase("~/.amem/memory.db");
+const result = syncToCopilot(db, { projectDir: "/my/project" });
+// -> { file: "/my/project/.github/copilot-instructions.md", memoriesExported: 12 }
+```
+
+### `generateCopilotInstructions(db, opts?): { markdown, counts }`
+
+Generate the markdown content for Copilot instructions without writing to disk. Useful for previewing or embedding in custom workflows.
+
 ---
 
 ## Relationship to amem
