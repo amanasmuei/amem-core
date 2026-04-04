@@ -1,6 +1,6 @@
 {
   "name": "@aman_asmuei/amem-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Core memory library for AI tools — database, embeddings, scoring, retrieval",
   "type": "module",
   "main": "dist/index.js",
