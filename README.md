@@ -390,12 +390,12 @@ Nearest tickets, in priority order:
 
 <div align="center">
 
-Built with ❤️ by **[Aman Asmuei](https://github.com/amanasmuei)**
+Built with ❤️ in 🇲🇾 **Malaysia** by **[Aman Asmuei](https://github.com/amanasmuei)**
 
 [**GitHub**](https://github.com/amanasmuei/amem-core) &nbsp;·&nbsp;
 [**npm**](https://www.npmjs.com/package/@aman_asmuei/amem-core) &nbsp;·&nbsp;
 [**Issues**](https://github.com/amanasmuei/amem-core/issues)
 
-<sub>Part of the <strong><a href="https://github.com/amanasmuei">aman ecosystem</a></strong> — local-first AI tools for SEA developers.</sub>
+<sub>Part of the <strong><a href="https://github.com/amanasmuei">aman ecosystem</a></strong> — local-first AI tools from Southeast Asia 🌏</sub>
 
 </div>
