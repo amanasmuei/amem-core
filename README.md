@@ -22,6 +22,38 @@ Use it directly in your app, or let `amem` wrap it as an MCP server for Claude C
 
 ---
 
+## What's actually inside
+
+amem-core is more than `store` + `recall`. The full feature set:
+
+### Retrieval
+- **Vector embeddings** — local 384-dim `bge-small-en-v1.5` via `@huggingface/transformers`. No API keys.
+- **HNSW approximate-nearest-neighbour** index via `hnswlib-node` for fast semantic search at scale
+- **Hybrid recall** — combines vector similarity, FTS5 full-text, tag matching, and recency scoring
+- **Query expansion** — rewrites short queries into richer search terms before recall
+
+### Temporal model
+- **Validity windows** — every memory has `valid_from` and `valid_until`. Recall filters out expired memories by default.
+- **"What was true in January?"** — explicit temporal queries supported via `validUntil`-aware filtering
+- **Auto-expire on contradiction** — when a new memory contradicts an existing one (high cosine similarity, conflicting content), the old one is auto-expired with a reason
+
+### Knowledge graph
+- **Memory relations** — typed edges between memories (`relates_to`, `contradicts`, `supersedes`, etc.) with their own validity windows
+- **Auto-relate** — discovers and creates relations between newly stored memories
+
+### Reflection & quality
+- **Clustering** — groups related memories for higher-level insights
+- **Contradiction detection** — flags conflicting facts with configurable similarity thresholds
+- **Gap analysis** — identifies underrepresented topics
+- **Consolidation** — merges duplicates, prunes stale, promotes frequently-accessed, decays idle
+
+### Multi-tenancy
+- **Per-scope storage** — every memory is tagged with a `scope` string (e.g. `dev:plugin`, `tg:12345`, `agent:productivity`)
+- **Tier management** — `active` / `archived` / `expired` tiers with explicit transitions
+- **Doctor command** — health check across DB integrity, embedding freshness, schema migrations
+
+---
+
 ## Install
 
 ```bash
