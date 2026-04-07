@@ -54,6 +54,25 @@ amem-core is more than `store` + `recall`. The full feature set:
 
 ---
 
+## Benchmarks
+
+### Quick recall (proof-of-life)
+
+A small hand-crafted benchmark with 20 distinct memories and 10 lookup queries where the gold-truth memory is known. Run with `npm run bench:quick`.
+
+| Metric | Score |
+|---|---|
+| **R@1**  | **70.0%** |
+| **R@3**  | **90.0%** |
+| **R@5**  | **90.0%** |
+| **R@10** | **100.0%** |
+
+9 of 10 queries land in the top 3. All 10 within the top 10. The one weaker case is a paraphrase mismatch (`"how do we ship logs"` vs the memory `"structured JSON logs using pino"`) — query expansion + reranking would close that gap.
+
+This is a *proof-of-life* benchmark, not a substitute for [LongMemEval](https://github.com/xiaowu0162/LongMemEval). A LongMemEval scaffold is on the roadmap.
+
+---
+
 ## Install
 
 ```bash
