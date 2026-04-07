@@ -56,20 +56,53 @@ amem-core is more than `store` + `recall`. The full feature set:
 
 ## Benchmarks
 
-### Quick recall (proof-of-life)
+### LongMemEval (Oracle) — turn-level recall
 
-A small hand-crafted benchmark with 20 distinct memories and 10 lookup queries where the gold-truth memory is known. Run with `npm run bench:quick`.
+[LongMemEval](https://github.com/xiaowu0162/LongMemEval) is the standard long-term-memory benchmark for LLM systems. The Oracle variant contains 500 evaluation questions across six task types (single-session, multi-session, knowledge-update, temporal-reasoning) with gold-evidence turns labelled in each conversation history.
+
+Run with `npm run bench:longmemeval` (see `bench/longmemeval/README.md` for setup).
+
+**Setup:** default amem-core recall pipeline — local `bge-small-en-v1.5` embeddings + cosine similarity. **No reranker, no query expansion, no fine-tuning.**
 
 | Metric | Score |
 |---|---|
-| **R@1**  | **70.0%** |
-| **R@3**  | **90.0%** |
-| **R@5**  | **90.0%** |
-| **R@10** | **100.0%** |
+| **R@1**  | **46.6%** |
+| **R@3**  | **78.5%** |
+| **R@5**  | **91.0%** |
+| **R@10** | **97.7%** |
 
-9 of 10 queries land in the top 3. All 10 within the top 10. The one weaker case is a paraphrase mismatch (`"how do we ship logs"` vs the memory `"structured JSON logs using pino"`) — query expansion + reranking would close that gap.
+500 questions, 479 scoreable (21 had no `has_answer` labels), 5 minutes runtime on CPU.
 
-This is a *proof-of-life* benchmark, not a substitute for [LongMemEval](https://github.com/xiaowu0162/LongMemEval). A LongMemEval scaffold is on the roadmap.
+#### Per question type
+
+| Type | n | R@1 | R@3 | R@5 | R@10 |
+|---|---:|---:|---:|---:|---:|
+| single-session-preference | 30 | 66.7% | 93.3% | **100.0%** | 100.0% |
+| single-session-user | 64 | 54.7% | 84.4% | 95.3% | 98.4% |
+| single-session-assistant | 56 | 30.4% | 78.6% | 92.9% | 98.2% |
+| multi-session | 125 | 53.6% | 79.2% | 90.4% | 96.8% |
+| knowledge-update | 72 | 43.1% | 80.6% | 90.3% | 100.0% |
+| temporal-reasoning | 132 | 40.2% | 70.5% | 87.1% | 96.2% |
+
+#### Honest notes
+
+- **91.0% R@5 with the default recall path is already competitive.** The cross-encoder reranker, query expansion, and HNSW ANN index in this codebase are *not* used in the default pipeline yet — wiring them in is the obvious next step.
+- **Temporal reasoning is the weakest type** (87.1% R@5). amem-core stores `valid_from` / `valid_until` per memory but the default scorer doesn't yet use them as ranking signals.
+- **R@1 is the headline gap** (46.6%). Reranking the top-K with a cross-encoder typically lifts R@1 by 10-20 points without affecting R@10. Not yet wired in.
+- Reproducible: any commit can re-run the benchmark and the number is logged to `bench/longmemeval/results.json`.
+
+### Quick recall (proof-of-life)
+
+A small hand-crafted sanity benchmark — 20 memories, 10 lookup queries with known gold-truth. Run with `npm run bench:quick`.
+
+| Metric | Score |
+|---|---|
+| R@1  | 70.0% |
+| R@3  | 90.0% |
+| R@5  | 90.0% |
+| R@10 | 100.0% |
+
+Useful for fast smoke tests during development without downloading the full LongMemEval dataset.
 
 ---
 

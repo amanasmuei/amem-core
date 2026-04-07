@@ -22,6 +22,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench:quick": "tsx bench/quick-recall.ts",
+    "bench:longmemeval": "tsx bench/longmemeval/run.ts",
     "prepare": "npm run build"
   },
   "dependencies": {

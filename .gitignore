@@ -1,3 +1,9 @@
 node_modules/
 dist/
 *.tgz
+
+# benchmark datasets (downloaded on demand) and outputs
+bench/longmemeval/longmemeval_oracle.json
+bench/longmemeval/longmemeval_s_cleaned.json
+bench/longmemeval/longmemeval_m_cleaned.json
+bench/longmemeval/results.json
