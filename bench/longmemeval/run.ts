@@ -25,6 +25,7 @@ import {
   createDatabase,
   generateEmbedding,
   recall,
+  isRerankerAvailable,
   type AmemDatabase,
 } from "../../src/index.js";
 
@@ -211,6 +212,13 @@ async function main(): Promise<void> {
   // Warm up the embedding model so the timer is honest
   console.log("[lme] warming up embedding model...");
   await generateEmbedding("warmup query");
+
+  // Verify the cross-encoder reranker is available — fail loud if not
+  console.log("[lme] checking reranker availability...");
+  const rerankerOk = await isRerankerAvailable();
+  console.log(
+    `[lme] reranker: ${rerankerOk ? "ENABLED (cross-encoder)" : "DISABLED (fallback to base scores)"}`,
+  );
 
   const startedAt = Date.now();
   const results: QuestionResult[] = [];

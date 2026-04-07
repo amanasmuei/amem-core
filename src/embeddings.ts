@@ -208,9 +208,40 @@ export async function isEmbeddingAvailable(): Promise<boolean> {
 }
 
 // ── Cross-Encoder Reranker ──────────────────────────────
+//
+// IMPORTANT IMPLEMENTATION NOTE
+// =============================
+// We DO NOT use the high-level `pipeline("text-classification", ...)` API
+// for cross-encoder reranking, even though it would be simpler.
+//
+// Reason: `Xenova/ms-marco-MiniLM-L-6-v2` is a single-logit regression head
+// dressed up as a text-classification model. The transformers.js pipeline
+// wrapper normalizes single-class outputs to a constant `score: 1.0` for
+// EVERY input — useless for ranking, and silently broken (the model loads,
+// returns "valid" results, but every score is identical).
+//
+// Confirmed via probe: even with `function_to_apply: "none"`, `top_k: null`,
+// or `topk: null`, the pipeline still emits `[{label: "LABEL_0", score: 1}]`
+// for both highly-relevant and irrelevant pairs.
+//
+// Workaround: bypass the pipeline entirely and use the lower-level
+// `AutoTokenizer` + `AutoModelForSequenceClassification` API to read the
+// raw output logit, which IS the actual relevance score.
+//
+// Verified spread on a known query/doc set: relevant docs score around +6,
+// unrelated docs score around -11. ~17 logit point gap. Reranker now works.
+
+type Tokenizer = (
+  query: string,
+  opts: { text_pair: string; padding: boolean; truncation: boolean },
+) => unknown;
+
+type SequenceClassificationModel = (inputs: unknown) => Promise<{
+  logits: { data: Float32Array | number[] };
+}>;
 
 interface CrossEncoderScorer {
-  (texts: Array<{ text: string; text_pair: string }>): Promise<Array<{ label: string; score: number }[]>>;
+  (texts: Array<{ text: string; text_pair: string }>): Promise<number[]>;
 }
 
 let rerankerInstance: CrossEncoderScorer | null = null;
@@ -225,24 +256,42 @@ async function getCrossEncoderPipeline(): Promise<CrossEncoderScorer | null> {
   rerankerLoading = (async () => {
     try {
       const mod = await import("@huggingface/transformers");
-      const classifier = await (mod.pipeline as Function)(
-        "text-classification",
-        "Xenova/ms-marco-MiniLM-L-6-v2",
-      );
+      const modelId = "Xenova/ms-marco-MiniLM-L-6-v2";
 
-      rerankerInstance = async (texts) => {
-        const results: Array<{ label: string; score: number }[]> = [];
-        // Process one at a time to avoid memory spikes
-        for (const pair of texts) {
-          const result = await (classifier as Function)(pair.text, { text_pair: pair.text_pair, topk: 1 });
-          const arr = Array.isArray(result) ? result : [result];
-          results.push(arr as { label: string; score: number }[]);
+      // Lower-level API to bypass the broken text-classification wrapper.
+      const tokenizer = (await (
+        mod.AutoTokenizer as unknown as { from_pretrained: (id: string) => Promise<Tokenizer> }
+      ).from_pretrained(modelId)) as Tokenizer;
+
+      const model = (await (
+        mod.AutoModelForSequenceClassification as unknown as {
+          from_pretrained: (id: string) => Promise<SequenceClassificationModel>;
         }
-        return results;
+      ).from_pretrained(modelId)) as SequenceClassificationModel;
+
+      rerankerInstance = async (pairs) => {
+        const scores: number[] = [];
+        // Process one at a time to keep peak memory low.
+        for (const pair of pairs) {
+          const inputs = tokenizer(pair.text, {
+            text_pair: pair.text_pair,
+            padding: true,
+            truncation: true,
+          });
+          const outputs = await model(inputs);
+          // Single-class regression head → 1 logit per pair, raw value is
+          // the relevance score (higher = more relevant).
+          const logit = Number(outputs.logits.data[0] ?? 0);
+          scores.push(logit);
+        }
+        return scores;
       };
       return rerankerInstance;
     } catch (error) {
-      console.error("[amem] Cross-encoder reranker unavailable — skipping rerank step:", error instanceof Error ? error.message : String(error));
+      console.error(
+        "[amem] Cross-encoder reranker unavailable — skipping rerank step:",
+        error instanceof Error ? error.message : String(error),
+      );
       rerankerFailed = true;
       return null;
     }
@@ -283,24 +332,25 @@ export async function rerankWithCrossEncoder(
   }
 
   try {
-    const pairs = candidates.map(c => ({
+    const pairs = candidates.map((c) => ({
       text: query,
       text_pair: c.content.slice(0, 512), // Truncate long docs for cross-encoder
     }));
 
-    const scores = await scorer(pairs);
+    const ceScores = await scorer(pairs);
 
-    // Merge cross-encoder scores with candidates
-    const reranked = candidates.map((c, i) => {
-      // Cross-encoder outputs relevance score; higher = more relevant
-      const ceScore = scores[i]?.[0]?.score ?? 0;
-      return { ...c, score: ceScore };
-    });
+    const reranked = candidates.map((c, i) => ({
+      ...c,
+      score: ceScores[i] ?? 0,
+    }));
 
     reranked.sort((a, b) => b.score - a.score);
     return reranked.slice(0, topK);
   } catch (error) {
-    console.error("[amem] Cross-encoder reranking failed, using original scores:", error instanceof Error ? error.message : String(error));
+    console.error(
+      "[amem] Cross-encoder reranking failed, using original scores:",
+      error instanceof Error ? error.message : String(error),
+    );
     return candidates.slice(0, topK);
   }
 }

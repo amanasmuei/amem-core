@@ -1,6 +1,6 @@
 import type { AmemDatabase } from "./database.js";
 import { recallMemories, type RecalledMemory, type ExplainedMemory, type MemoryTypeValue } from "./memory.js";
-import { generateEmbedding } from "./embeddings.js";
+import { generateEmbedding, rerankWithCrossEncoder } from "./embeddings.js";
 import { shortId, formatAge } from "./helpers.js";
 
 export interface RecallOptions {
@@ -12,7 +12,24 @@ export interface RecallOptions {
   compact?: boolean;
   explain?: boolean;
   scope?: string;
+  /**
+   * Apply cross-encoder reranking on the top-K candidates.
+   * Default: true. Set to false for the fastest possible recall.
+   *
+   * When enabled, the recall over-fetches candidates from the
+   * multi-strategy retriever, then reranks them with a cross-encoder
+   * for higher precision. Typical lift: +10-20 points on R@1.
+   */
+  rerank?: boolean;
 }
+
+/**
+ * How many candidates to over-fetch before reranking. Larger values
+ * give the cross-encoder more material to choose from at the cost of
+ * more scoring calls. 3x has been a sensible default in the literature.
+ */
+const RERANK_OVERFETCH = 3;
+const RERANK_MIN_FETCH = 30;
 
 export interface RecallResult {
   query: string;
@@ -27,20 +44,50 @@ export async function recall(
   db: AmemDatabase,
   opts: RecallOptions,
 ): Promise<RecallResult> {
-  const { query, limit = 10, type, tag, minConfidence, compact = true, explain = false, scope } = opts;
+  const {
+    query, limit = 10, type, tag, minConfidence,
+    compact = true, explain = false, scope, rerank = true,
+  } = opts;
 
   const queryEmbedding = await generateEmbedding(query);
 
-  const results = recallMemories(db, {
+  // When reranking, over-fetch candidates so the cross-encoder has
+  // a wider pool to choose from. Otherwise just fetch `limit`.
+  const fetchLimit = rerank ? Math.max(limit * RERANK_OVERFETCH, RERANK_MIN_FETCH) : limit;
+
+  const candidates = recallMemories(db, {
     query,
     queryEmbedding,
-    limit,
+    limit: fetchLimit,
     type: type as MemoryTypeValue | undefined,
     tag,
     minConfidence,
     scope,
     explain,
   });
+
+  // Rerank top-K with cross-encoder if enabled and we have enough candidates
+  let results: RecalledMemory[];
+  if (rerank && candidates.length > 1) {
+    const rerankInput = candidates.map((c) => ({
+      id: c.id,
+      content: c.content,
+      score: c.score,
+    }));
+    const reranked = await rerankWithCrossEncoder(query, rerankInput, limit);
+    // Map reranked results back to RecalledMemory, preserving all original fields
+    // but using the cross-encoder score
+    const byId = new Map(candidates.map((c) => [c.id, c]));
+    results = reranked
+      .map((r) => {
+        const orig = byId.get(r.id);
+        if (!orig) return null;
+        return { ...orig, score: r.score };
+      })
+      .filter((r): r is RecalledMemory => r !== null);
+  } else {
+    results = candidates.slice(0, limit);
+  }
 
   for (const r of results) db.touchAccess(r.id);
 
