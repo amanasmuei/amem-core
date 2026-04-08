@@ -63,6 +63,9 @@ export {
 // ── Config ───────────────────────────────────────────
 export {
   type AmemConfig,
+  AmemConfigSchema,
+  RESTART_REQUIRED_CONFIG_KEYS,
+  DANGEROUS_CONFIG_KEYS,
   getConfigPath,
   loadConfig,
   saveConfig,

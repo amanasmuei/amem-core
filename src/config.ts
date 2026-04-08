@@ -1,61 +1,97 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { z } from "zod";
 
-export interface AmemConfig {
+// ── Authoritative config schema ──────────────────────────
+//
+// This Zod schema is the single source of truth for AmemConfig.
+// The TypeScript interface is derived via z.infer.
+// Used by:
+//   - loadConfig / saveConfig (runtime validation)
+//   - amem's memory_config MCP tool (whitelist validation)
+//
+// When adding or changing fields: update this schema, the default below,
+// and nothing else — all consumers pick up the change automatically.
+
+/**
+ * Keys that require an amem server restart to fully take effect.
+ * memory_config surfaces these as a warning when changed.
+ */
+export const RESTART_REQUIRED_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "embeddingModel",
+  "embeddingCacheSize",
+]);
+
+/**
+ * Keys that would corrupt existing data if changed.
+ * memory_config blocks these unless force:true is passed.
+ */
+export const DANGEROUS_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "embeddingDimensions",
+]);
+
+export const AmemConfigSchema = z.object({
   // Embedding
-  embeddingModel: string;
-  embeddingDimensions: number;
-  embeddingCacheSize: number;
+  embeddingModel: z.string().min(1),
+  embeddingDimensions: z.number().int().positive(),
+  embeddingCacheSize: z.number().int().nonnegative(),
 
   // Retrieval
-  retrieval: {
-    semanticWeight: number;
-    ftsWeight: number;
-    graphWeight: number;
-    temporalWeight: number;
-    maxCandidates: number;       // Replaces the old 5K cap
-    rerankerEnabled: boolean;
-    rerankerTopK: number;
-  };
+  retrieval: z.object({
+    semanticWeight: z.number().min(0).max(1),
+    ftsWeight: z.number().min(0).max(1),
+    graphWeight: z.number().min(0).max(1),
+    temporalWeight: z.number().min(0).max(1),
+    maxCandidates: z.number().int().positive(),
+    rerankerEnabled: z.boolean(),
+    rerankerTopK: z.number().int().positive(),
+  }).strict(),
 
   // Consolidation defaults
-  consolidation: {
-    maxStaleDays: number;
-    minConfidence: number;
-    minAccessCount: number;
-    enableDecay: boolean;
-    decayFactor: number;
-  };
+  consolidation: z.object({
+    maxStaleDays: z.number().int().nonnegative(),
+    minConfidence: z.number().min(0).max(1),
+    minAccessCount: z.number().int().nonnegative(),
+    enableDecay: z.boolean(),
+    decayFactor: z.number().min(0).max(1),
+  }).strict(),
 
   // Privacy
-  privacy: {
-    enablePrivateTags: boolean;   // Strip <private>...</private> from storage
-    redactPatterns: string[];     // Regex patterns to auto-redact (e.g., API keys)
-  };
+  privacy: z.object({
+    enablePrivateTags: z.boolean(),
+    redactPatterns: z.array(
+      z.string().refine(
+        (pat) => { try { new RegExp(pat); return true; } catch { return false; } },
+        { message: "Invalid regex pattern" },
+      ),
+    ),
+  }).strict(),
 
   // Hooks (automatic memory capture)
-  hooks: {
-    enabled: boolean;
-    captureToolUse: boolean;      // PostToolUse hook
-    captureSessionEnd: boolean;   // SessionEnd summarization
-    autoExtractInterval: number;  // Minutes between auto-extractions (0 = disabled)
-  };
+  hooks: z.object({
+    enabled: z.boolean(),
+    captureToolUse: z.boolean(),
+    captureSessionEnd: z.boolean(),
+    autoExtractInterval: z.number().int().nonnegative(),
+  }).strict(),
 
   // Memory tiers
-  tiers: {
-    coreMaxTokens: number;       // Max tokens in core memory (always injected)
-    workingMaxTokens: number;    // Max tokens in working memory (session-scoped)
-  };
+  tiers: z.object({
+    coreMaxTokens: z.number().int().positive(),
+    workingMaxTokens: z.number().int().positive(),
+  }).strict(),
 
   // Team sync (future)
-  team: {
-    enabled: boolean;
-    syncPath: string | null;     // Shared path for team memory sync
-    syncInterval: number;        // Minutes between syncs
-    userId: string | null;       // Unique user identifier for RBAC
-  };
-}
+  team: z.object({
+    enabled: z.boolean(),
+    syncPath: z.string().nullable(),
+    syncInterval: z.number().int().positive(),
+    userId: z.string().nullable(),
+  }).strict(),
+}).strict();
+
+export type AmemConfig = z.infer<typeof AmemConfigSchema>;
 
 const DEFAULT_CONFIG: AmemConfig = {
   embeddingModel: "Xenova/bge-small-en-v1.5",
@@ -131,7 +167,7 @@ export function loadConfig(): AmemConfig {
     console.error("[amem] Failed to load config, using defaults:", error instanceof Error ? error.message : String(error));
   }
 
-  loadedConfig = { ...DEFAULT_CONFIG };
+  loadedConfig = structuredClone(DEFAULT_CONFIG);
   return loadedConfig;
 }
 
@@ -148,7 +184,9 @@ export function saveConfig(config: Partial<AmemConfig>): void {
 }
 
 export function getDefaultConfig(): AmemConfig {
-  return { ...DEFAULT_CONFIG };
+  // Deep clone so callers can safely mutate nested fields (e.g. privacy.redactPatterns)
+  // without leaking into the shared DEFAULT_CONFIG.
+  return structuredClone(DEFAULT_CONFIG);
 }
 
 export function resetConfigCache(): void {

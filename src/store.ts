@@ -30,10 +30,22 @@ export async function storeMemory(
 ): Promise<StoreResult> {
   const { type, tags = [], confidence = 0.8, source = "conversation", scope } = opts;
 
-  const content = sanitizeContent(opts.content) ?? opts.content;
-  if (content !== opts.content && sanitizeContent(opts.content) === null) {
-    return { action: "private", id: "", type, confidence, tags, total: 0, reinforced: 0 };
+  // Privacy: sanitizeContent returns null when the entire input is private
+  // (e.g. wrapped in <private>...</private>). In that case, do NOT store —
+  // return a "private" action so the caller knows the memory was dropped.
+  const sanitized = sanitizeContent(opts.content);
+  if (sanitized === null) {
+    return {
+      action: "private",
+      id: "",
+      type,
+      confidence,
+      tags,
+      total: db.getStats().total,
+      reinforced: 0,
+    };
   }
+  const content = sanitized;
 
   const embedding = await generateEmbedding(content);
 
