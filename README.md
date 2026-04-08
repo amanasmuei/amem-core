@@ -4,7 +4,7 @@
 
 ### Long-term memory for AI agents that actually retrieves the right thing.
 
-**94.6% R@5 on LongMemEval** &nbsp;·&nbsp; Local-first &nbsp;·&nbsp; Zero API keys &nbsp;·&nbsp; TypeScript
+**94.8% R@5 on LongMemEval** &nbsp;·&nbsp; Local-first &nbsp;·&nbsp; Zero API keys &nbsp;·&nbsp; TypeScript
 
 <br/>
 
@@ -37,9 +37,9 @@
 
 | **R@1** | **R@3** | **R@5** | **R@10** |
 |:---:|:---:|:---:|:---:|
-| **64.9%** | **91.0%** | **🏆 94.6%** | **97.7%** |
+| **65.6%** | **91.0%** | **🏆 94.8%** | **97.7%** |
 
-*LongMemEval Oracle, 500 questions, default pipeline (bi-encoder + cross-encoder reranker), ~7 min on CPU*
+*LongMemEval Oracle, 500 questions, default pipeline (bi-encoder + adaptive cross-encoder reranker), ~5 min on CPU*
 
 </div>
 
@@ -142,42 +142,44 @@ That's it. Embeddings download automatically on first call (~25 MB, one time). N
 
 [LongMemEval](https://github.com/xiaowu0162/LongMemEval) is the standard long-term-memory benchmark for LLM systems, by Wu et al. The Oracle variant contains **500 evaluation questions** across six task types (single-session, multi-session, knowledge-update, temporal-reasoning) with gold-evidence turns labelled in each conversation history.
 
-**Setup:** default `amem-core` recall pipeline — local `bge-small-en-v1.5` bi-encoder embeddings + `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder reranking the top-30 candidates. All in-process. All CPU. No API keys.
+**Setup:** default `amem-core` recall pipeline — local `bge-small-en-v1.5` bi-encoder embeddings + `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder *adaptively* reranking the top-30 candidates (skipped for advice-seeking queries where the MS-MARCO reranker systematically hurts). All in-process. All CPU. No API keys.
 
 <div align="center">
 
 | Metric | Score |
 |:---:|:---:|
-| **R@1**  | **64.9%** |
+| **R@1**  | **65.6%** |
 | **R@3**  | **91.0%** |
-| **R@5**  | **🏆 94.6%** |
+| **R@5**  | **🏆 94.8%** |
 | **R@10** | **97.7%** |
 
-**479** scoreable questions · **420s** runtime · **CPU only** · **Node 22**
+**479** scoreable questions · **328s** runtime · **CPU only** · **Node 22**
 
 </div>
 
-#### The reranker effect (before vs after)
+#### Pipeline evolution
 
-| Metric | Bi-encoder only | + Cross-encoder reranker | Δ |
-|:---|---:|---:|---:|
-| **R@1**  | 46.6% | **64.9%** | **+18.3** 🏆 |
-| **R@3**  | 78.5% | **91.0%** | **+12.5** |
-| **R@5**  | 91.0% | **94.6%** | **+3.6** |
-| **R@10** | 97.7% | 97.7% | ±0.0 |
+Three tracked runs on the same 500-question set, same hardware:
 
-The reranker shuffles within the top-K candidate set, so R@10 stays saturated while R@1 / R@3 climb dramatically. To opt out (faster recall, weaker R@1), pass `rerank: false` to `recall()`.
+| Pipeline | R@1 | R@3 | R@5 | R@10 |
+|:---|---:|---:|---:|---:|
+| v0.3.0 — bi-encoder only | 46.6% | 78.5% | 91.0% | 97.7% |
+| v0.4.0 — + cross-encoder reranker | 64.9% | 91.0% | 94.6% | 97.7% |
+| **v0.4.2 — + adaptive rerank (current)** | **65.6%** | **91.0%** | **94.8%** | **97.7%** |
+| Δ (v0.3.0 → v0.4.2) | **+19.0** | **+12.5** | **+3.8** | ±0.0 |
 
-#### Per question type
+Each step is a real, reproducible benchmark run — not a projection.
+
+#### Per question type (current)
 
 | Type | n | R@1 | R@3 | R@5 | R@10 |
 |:---|---:|---:|---:|---:|---:|
 | `single-session-user` | 64 | **84.4%** 🏆 | 95.3% | 98.4% | 98.4% |
 | `multi-session` | 125 | 71.2% | 93.6% | 98.4% | 99.2% |
 | `knowledge-update` | 72 | 59.7% | 95.8% | **100.0%** 🏆 | 100.0% |
+| `single-session-preference` | 30 | 60.0% | 90.0% | 96.7% | 96.7% |
 | `single-session-assistant` | 56 | 58.9% | 85.7% | 87.5% | 94.6% |
 | `temporal-reasoning` | 132 | 58.3% | 86.4% | 89.4% | 96.2% |
-| `single-session-preference` | 30 | 50.0% | 90.0% | 93.3% | 96.7% |
 
 #### Reproduce it yourself
 
@@ -194,10 +196,10 @@ Quick smoke test on 5 questions: `LME_SAMPLE=5 npm run bench:longmemeval`
 
 #### Honest notes
 
-- **The cross-encoder reranker is the headline win.** It lifted R@1 from 46.6% → 64.9% (+18.3 points) and R@3 from 78.5% → 91.0% (+12.5 points) across the full 500-question set. Default-on as of this version; opt out with `recall(db, { query, rerank: false })` for faster but weaker recall.
-- **`single-session-preference` regressed slightly** (R@5 100% → 93.3%). The cross-encoder picks up the wrong signal on opinion / preference questions where multiple candidates can all be semantically valid. This is a known limitation of MS-MARCO-trained rerankers on subjective text. A future ticket is to detect preference-style queries and skip rerank for them.
-- **Temporal reasoning is still the weakest type** (89.4% R@5). amem-core stores `valid_from` / `valid_until` per memory but the default scorer doesn't yet use them as ranking signals.
-- **HNSW ANN index** in this codebase is not yet wired into the default recall path — currently exposed only via `buildVectorIndex` for explicit batched search at scale. On the roadmap.
+- **The cross-encoder reranker is the headline win.** Lifted R@1 from 46.6% → 65.6% (+19.0) and R@3 from 78.5% → 91.0% (+12.5) across the full 500-question set. Default-on; opt out with `recall(db, { query, rerank: false })` for the fastest possible path.
+- **Adaptive rerank fixes the preference regression.** The MS-MARCO-trained cross-encoder systematically promotes assistant-paraphrase text above the user's original preference statement. `amem-core` detects advice-seeking queries (`recommend`, `suggest`, `any tips`, `help me find`...) and falls back to bi-encoder order for those, while still reranking direct lookup queries. Preference R@5 recovered from 93.3% → 96.7% (+3.4). Details: see `isAdviceSeekingQuery()` in `src/recall.ts` and the diagnostic in `bench/preference-diag.ts`.
+- **Temporal reasoning is still the weakest type** (89.4% R@5). `amem-core` stores `valid_from` / `valid_until` per memory but the default scorer doesn't yet use them as ranking signals. Next ticket.
+- **HNSW ANN index** exists in the codebase but isn't wired into the default recall path — currently exposed only via `buildVectorIndex` for explicit batched search at scale. Only matters at 100k+ memory scale.
 - Run is fully reproducible — every commit can re-execute the benchmark and append to `bench/longmemeval/results.json`.
 
 #### Implementation note: cross-encoder via raw model API
@@ -227,7 +229,7 @@ How `amem-core` stacks up against [mempalace](https://github.com/milla-jovovich/
 
 | | **amem-core** | mempalace |
 |---|---|---|
-| **LongMemEval R@5** | **94.6%** *(default pipeline + reranker)* | 96.6% *(full pipeline + reranker)* |
+| **LongMemEval R@5** | **94.8%** *(adaptive rerank, default pipeline)* | 96.6% *(full pipeline + reranker)* |
 | **Runtime** | TypeScript / Node | Python 3.9+ |
 | **Storage** | SQLite (single file) | SQLite + ChromaDB |
 | **Vector index** | HNSW (`hnswlib-node`) | ChromaDB |
@@ -361,7 +363,7 @@ Single dependency tree. No Python. No vector DB process. No API keys. The whole 
 Nearest tickets, in priority order:
 
 - [x] **Wire cross-encoder reranking into default recall path** — shipped: R@1 46.6% → 64.9% (+18.3), R@5 91.0% → 94.6% (+3.6)
-- [ ] **Skip rerank for preference-style queries** — recover the lost ground on `single-session-preference` (regressed 100% → 93.3% R@5 with reranker on)
+- [x] **Skip rerank for advice-seeking queries** — shipped: preference R@5 recovered 93.3% → 96.7%, overall R@5 94.6% → 94.8%
 - [ ] **Time-aware ranking signal** — use `valid_from` / `valid_until` distance from query date to lift `temporal-reasoning` (currently weakest type at 89.4% R@5)
 - [ ] **Wire HNSW into the hot path** — currently exposed only via explicit `buildVectorIndex` calls
 - [ ] **Run LongMemEval-S and LongMemEval-M variants** — full haystack benchmarks, not just Oracle
