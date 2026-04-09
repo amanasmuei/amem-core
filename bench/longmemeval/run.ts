@@ -188,16 +188,33 @@ async function scoreQuestion(q: Question): Promise<QuestionResult> {
 
 async function main(): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const datasetPath = path.join(here, "longmemeval_oracle.json");
+
+  // Pick variant via env var (default: oracle)
+  //   LME_VARIANT=oracle  → longmemeval_oracle.json (15 MB, evidence only)
+  //   LME_VARIANT=s       → longmemeval_s_cleaned.json (277 MB, full haystack ~40 sessions/q)
+  //   LME_VARIANT=m       → longmemeval_m_cleaned.json (2.74 GB, full haystack ~500 sessions/q)
+  const variant = process.env.LME_VARIANT ?? "oracle";
+  const variantFile: Record<string, string> = {
+    oracle: "longmemeval_oracle.json",
+    s: "longmemeval_s_cleaned.json",
+    m: "longmemeval_m_cleaned.json",
+  };
+  const datasetFilename = variantFile[variant];
+  if (!datasetFilename) {
+    console.error(`[lme] unknown LME_VARIANT: ${variant}. Use oracle | s | m`);
+    process.exit(1);
+  }
+  const datasetPath = path.join(here, datasetFilename);
 
   if (!fs.existsSync(datasetPath)) {
     console.error(`[lme] dataset not found at ${datasetPath}`);
     console.error(
-      `[lme] download with: curl -sL -o ${datasetPath} https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json`,
+      `[lme] download with: curl -sL -o ${datasetPath} https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/${datasetFilename}`,
     );
     process.exit(1);
   }
 
+  console.log(`[lme] variant: ${variant} (${datasetFilename})`);
   console.log("[lme] loading dataset...");
   const dataset: Question[] = JSON.parse(fs.readFileSync(datasetPath, "utf8"));
   console.log(`[lme] loaded ${dataset.length} questions`);
@@ -265,7 +282,7 @@ async function main(): Promise<void> {
   console.log("amem-core × LongMemEval (Oracle) — turn-level recall");
   console.log("─".repeat(70));
   console.log(
-    `dataset:  longmemeval_oracle.json (${dataset.length} questions, ${scoreable.length} scoreable)`,
+    `dataset:  ${datasetFilename} (${dataset.length} questions, ${scoreable.length} scoreable)`,
   );
   console.log(
     `runtime:  ${((Date.now() - startedAt) / 1000).toFixed(1)}s on ${work.length} questions`,
@@ -297,13 +314,14 @@ async function main(): Promise<void> {
   console.log("─".repeat(70));
 
   // ── Save JSON report ─────────────────────────────────────────────────────
-  const reportPath = path.join(here, "results.json");
+  const reportPath = path.join(here, `results-${variant}.json`);
   fs.writeFileSync(
     reportPath,
     JSON.stringify(
       {
         timestamp: new Date().toISOString(),
-        dataset: "longmemeval_oracle.json",
+        dataset: datasetFilename,
+        variant,
         total_questions: dataset.length,
         scored_questions: scoreable.length,
         runtime_seconds: (Date.now() - startedAt) / 1000,
