@@ -252,29 +252,54 @@ npm run bench:quick
 
 ## 🥊 Honest comparison
 
-How `amem-core` stacks up against [mempalace](https://github.com/milla-jovovich/mempalace), the most-talked-about open-source AI memory system:
+How `amem-core` stacks up against [mempalace](https://github.com/MemPalace/mempalace), the most-talked-about open-source AI memory system.
+
+**Before the headline numbers — the methodology you need to compare fairly:**
+
+LongMemEval has three dataset variants and two scoring granularities, and they produce *very* different numbers on the same system:
+
+| Axis | Easier ← → Harder |
+|---|---|
+| **Variant** | Oracle (evidence-only, no distractors) → S (~40 sessions/Q) → M (~500 sessions/Q) |
+| **Metric** | Session-level R@K (did any retrieved item belong to the gold *session*?) → Turn-level R@K (did it hit the gold *message*?) |
+
+Session-level ≥ turn-level on the same data by construction. Oracle ≥ S ≥ M by construction. A "94.6% R@5" and a "96.6% R@5" are not comparable unless you know which axis each was measured on.
+
+### The numbers, honestly labelled
+
+| Measurement | amem-core (v0.5.1) | mempalace |
+|---|---|---|
+| **Oracle, turn-level R@5** | **94.6%** *(default pipeline)* | not reported |
+| **Oracle, session-level R@5** | **100.0%** *(500/500 Q)* | not reported |
+| **S, turn-level R@5** | 91.2% *(v0.4.2 baseline; v0.5.1 re-run pending)* | not reported |
+| **S, session-level R@5** | *running — will land here* | **96.6%** *(raw ChromaDB, no LLM)* |
+| **S, session-level R@5 (with LLM rerank)** | *not implemented* | 98.4% on held-out / 100.0% on full set *(Claude Haiku, ~500 API calls per run)* |
+
+The mempalace "100%" figure comes with [their own disclosure](https://github.com/MemPalace/mempalace/blob/develop/benchmarks/BENCHMARKS.md) that three targeted fixes were written after examining specific failing questions — they call it *"teaching to the test"* explicitly. On a clean 450-Q held-out split the honest number is **98.4%** (still with Haiku reranking).
+
+### Capability-wise
 
 | | **amem-core** | mempalace |
 |---|---|---|
-| **LongMemEval R@5** | **94.8%** *(adaptive rerank, default pipeline)* | 96.6% *(full pipeline + reranker)* |
-| **Runtime** | TypeScript / Node | Python 3.9+ |
+| **Runtime** | TypeScript / Node (≥18) | Python 3.9+ |
 | **Storage** | SQLite (single file) | SQLite + ChromaDB |
 | **Vector index** | HNSW (`hnswlib-node`) | ChromaDB |
-| **Embeddings** | Local `bge-small-en-v1.5`, no API | Local + optional API |
+| **Embeddings** | Local `bge-small-en-v1.5`, no API | Local (ChromaDB default) |
+| **Cross-encoder rerank** | Local `ms-marco-MiniLM` (int8, batched) | Optional Claude Haiku API |
+| **Zero API keys for default pipeline** | ✅ | ✅ *(raw mode only)* |
+| **Recall latency (p50)** | **~14 ms** local only | not published |
 | **Validity windows** | ✅ `valid_from` / `valid_until` | ✅ |
 | **Contradiction detection** | ✅ auto-expire | ✅ |
 | **Knowledge graph** | ✅ typed relations | ✅ |
-| **Reflection / clustering** | ✅ | ✅ |
 | **Multi-tenant** | ✅ scope-routed | ✅ wings/rooms |
+| **Single dependency tree** | ✅ pure `npm install` | ❌ Python + ChromaDB server |
 | **Install size** | ~250 MB (with model) | ~500 MB+ |
-| **Single dependency tree** | ✅ pure npm | ❌ Python + ChromaDB server |
 
-**The honest summary:**
-- **mempalace has higher peak recall** (96.6%) because it ships with a reranker wired into the default path.
-- **amem-core is closer than the gap suggests** (5.6 points) and the gap lives in a component that already exists in the codebase but isn't wired in by default.
-- **amem-core is genuinely simpler to deploy** if you're already in the JavaScript / TypeScript ecosystem: one `npm install`, one SQLite file, no separate vector DB process, no Python runtime.
+### Honest takeaways
 
-Pick `amem-core` if you want **production simplicity in a TypeScript stack**. Pick mempalace if you want **peak research-grade recall on day one** and Python is fine.
+1. **Don't compare 94.8% to 96.6% directly.** One is Oracle + turn-level (strict); the other is S + session-level (less strict). The real apples-to-apples benchmark is S + session-level — [it's now in the bench suite](./bench/longmemeval/run.ts) behind `LME_METRIC=session` and the full-500 run is in flight; this table will be updated with the number.
+2. **Both systems are good at this.** The quality difference is narrower than the headline implies, and once you account for mempalace's own disclosed "teaching to the test" adjustments, the honest held-out gap is smaller still.
+3. **The real choice is about the deployment shape, not the recall percentage.** Pick `amem-core` for a TypeScript stack with zero API dependencies and one `npm install`. Pick mempalace for a Python stack where you're happy calling Claude Haiku per query for the last few points of recall.
 
 ---
 
