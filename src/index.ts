@@ -79,6 +79,8 @@ export {
   recall,
   type RecallOptions,
   type RecallResult,
+  getProfileSamples,
+  resetProfileSamples,
 } from "./recall.js";
 
 // ── Context (high-level) ────────────────────────────

@@ -3,6 +3,35 @@ import { recallMemories, type RecalledMemory, type ExplainedMemory, type MemoryT
 import { generateEmbedding, rerankWithCrossEncoder } from "./embeddings.js";
 import { shortId, formatAge } from "./helpers.js";
 
+// Opt-in stage profiler. Set AMEM_PROFILE=1 to collect per-stage latencies.
+// Off by default — zero overhead in production.
+const PROFILE_ENABLED = process.env.AMEM_PROFILE === "1";
+const profileSamples: { stage: string; ms: number }[] = [];
+
+async function markAsync<T>(stage: string, fn: () => Promise<T>): Promise<T> {
+  if (!PROFILE_ENABLED) return fn();
+  const t0 = performance.now();
+  const v = await fn();
+  profileSamples.push({ stage, ms: performance.now() - t0 });
+  return v;
+}
+
+function markSync<T>(stage: string, fn: () => T): T {
+  if (!PROFILE_ENABLED) return fn();
+  const t0 = performance.now();
+  const v = fn();
+  profileSamples.push({ stage, ms: performance.now() - t0 });
+  return v;
+}
+
+export function getProfileSamples(): ReadonlyArray<{ stage: string; ms: number }> {
+  return profileSamples;
+}
+
+export function resetProfileSamples(): void {
+  profileSamples.length = 0;
+}
+
 export interface RecallOptions {
   query: string;
   limit?: number;
@@ -116,13 +145,13 @@ export async function recall(
   // text over the user's original preference statement.
   const rerankActive = rerank && !isAdviceSeekingQuery(query);
 
-  const queryEmbedding = await generateEmbedding(query);
+  const queryEmbedding = await markAsync("embed", () => generateEmbedding(query));
 
   // When reranking, over-fetch candidates so the cross-encoder has
   // a wider pool to choose from. Otherwise just fetch `limit`.
   const fetchLimit = rerankActive ? Math.max(limit * RERANK_OVERFETCH, RERANK_MIN_FETCH) : limit;
 
-  const candidates = recallMemories(db, {
+  const candidates = markSync("retrieve", () => recallMemories(db, {
     query,
     queryEmbedding,
     limit: fetchLimit,
@@ -131,7 +160,7 @@ export async function recall(
     minConfidence,
     scope,
     explain,
-  });
+  }));
 
   // Rerank top-K with cross-encoder if enabled and we have enough candidates
   let results: RecalledMemory[];
@@ -141,7 +170,7 @@ export async function recall(
       content: c.content,
       score: c.score,
     }));
-    const reranked = await rerankWithCrossEncoder(query, rerankInput, limit);
+    const reranked = await markAsync("rerank", () => rerankWithCrossEncoder(query, rerankInput, limit));
     // Map reranked results back to RecalledMemory, preserving all original fields
     // but using the cross-encoder score
     const byId = new Map(candidates.map((c) => [c.id, c]));
