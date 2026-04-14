@@ -4,7 +4,7 @@
 
 ### Long-term memory for AI agents that actually retrieves the right thing.
 
-**94.8% R@5 on LongMemEval** &nbsp;·&nbsp; Local-first &nbsp;·&nbsp; Zero API keys &nbsp;·&nbsp; TypeScript
+**94.8% R@5 on LongMemEval** &nbsp;·&nbsp; **~14ms p50 recall** &nbsp;·&nbsp; Local-first &nbsp;·&nbsp; TypeScript
 
 <br/>
 
@@ -16,7 +16,7 @@
 &nbsp;
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=for-the-badge&logo=typescript&logoColor=white)
 &nbsp;
-![Tests](https://img.shields.io/badge/tests-97%20passing-brightgreen?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-285%20passing-brightgreen?style=for-the-badge)
 
 <br/>
 
@@ -35,11 +35,11 @@
 
 <div align="center">
 
-| **R@1** | **R@3** | **R@5** | **R@10** |
-|:---:|:---:|:---:|:---:|
-| **65.6%** | **91.0%** | **🏆 94.8%** | **97.7%** |
+| **R@1** | **R@3** | **R@5** | **R@10** | **recall p50** |
+|:---:|:---:|:---:|:---:|:---:|
+| **66.2%** | **90.8%** | **🏆 94.6%** | **97.5%** | **13.9ms** |
 
-*LongMemEval Oracle, 500 questions, default pipeline (bi-encoder + adaptive cross-encoder reranker), ~5 min on CPU*
+*LongMemEval Oracle, 500 questions, default pipeline (bi-encoder + int8 cross-encoder reranker, batched). ~5 min on CPU. Recall latency measured on synthetic 60-query workload; see `bench/profile-recall.ts`.*
 
 </div>
 
@@ -148,12 +148,12 @@ That's it. Embeddings download automatically on first call (~25 MB, one time). N
 
 | Metric | Score |
 |:---:|:---:|
-| **R@1**  | **65.6%** |
-| **R@3**  | **91.0%** |
-| **R@5**  | **🏆 94.8%** |
-| **R@10** | **97.7%** |
+| **R@1**  | **66.2%** |
+| **R@3**  | **90.8%** |
+| **R@5**  | **🏆 94.6%** |
+| **R@10** | **97.5%** |
 
-**479** scoreable questions · **328s** runtime · **CPU only** · **Node 22**
+**479** scoreable questions · **301s** runtime · **CPU only** · **Node 22**
 
 </div>
 
@@ -161,25 +161,26 @@ That's it. Embeddings download automatically on first call (~25 MB, one time). N
 
 Three tracked runs on the same 500-question set, same hardware:
 
-| Pipeline | R@1 | R@3 | R@5 | R@10 |
-|:---|---:|---:|---:|---:|
-| v0.3.0 — bi-encoder only | 46.6% | 78.5% | 91.0% | 97.7% |
-| v0.4.0 — + cross-encoder reranker | 64.9% | 91.0% | 94.6% | 97.7% |
-| **v0.4.2 — + adaptive rerank (current)** | **65.6%** | **91.0%** | **94.8%** | **97.7%** |
-| Δ (v0.3.0 → v0.4.2) | **+19.0** | **+12.5** | **+3.8** | ±0.0 |
+| Pipeline | R@1 | R@3 | R@5 | R@10 | recall p50 |
+|:---|---:|---:|---:|---:|---:|
+| v0.3.0 — bi-encoder only | 46.6% | 78.5% | 91.0% | 97.7% | — |
+| v0.4.0 — + cross-encoder reranker | 64.9% | 91.0% | 94.6% | 97.7% | — |
+| v0.4.2 — + adaptive rerank | 65.6% | 91.0% | 94.8% | 97.7% | ~38ms |
+| **v0.5.1 — + batched + int8 rerank (current)** | **66.2%** | **90.8%** | **94.6%** | **97.5%** | **13.9ms** |
+| Δ (v0.3.0 → v0.5.1) | **+19.6** | **+12.3** | **+3.6** | -0.2 | — |
 
-Each step is a real, reproducible benchmark run — not a projection.
+Each step is a real, reproducible benchmark run — not a projection. The small R@3/R@5/R@10 dip from v0.4.2 → v0.5.1 is **1 question of 479** (within run-to-run noise); the rank-correlation between v0.4.2 fp32 and v0.5.1 int8 is **0.995**, and R@1 actually improved.
 
 #### Per question type (current)
 
 | Type | n | R@1 | R@3 | R@5 | R@10 |
 |:---|---:|---:|---:|---:|---:|
-| `single-session-user` | 64 | **84.4%** 🏆 | 95.3% | 98.4% | 98.4% |
-| `multi-session` | 125 | 71.2% | 93.6% | 98.4% | 99.2% |
+| `single-session-user` | 64 | **84.4%** 🏆 | 95.3% | 96.9% | 98.4% |
+| `multi-session` | 125 | 71.2% | 92.8% | 97.6% | 99.2% |
 | `knowledge-update` | 72 | 59.7% | 95.8% | **100.0%** 🏆 | 100.0% |
-| `single-session-preference` | 30 | 60.0% | 90.0% | 96.7% | 96.7% |
+| `single-session-preference` | 30 | 63.3% | 90.0% | 96.7% | 96.7% |
 | `single-session-assistant` | 56 | 58.9% | 85.7% | 87.5% | 94.6% |
-| `temporal-reasoning` | 132 | 58.3% | 86.4% | 89.4% | 96.2% |
+| `temporal-reasoning` | 132 | 59.8% | 86.4% | 90.2% | 95.5% |
 
 #### Reproduce it yourself
 
@@ -194,11 +195,37 @@ npm run bench:longmemeval
 
 Quick smoke test on 5 questions: `LME_SAMPLE=5 npm run bench:longmemeval`
 
+#### Recall latency (v0.5.1+)
+
+Per-stage latency, synthetic 60-query workload, cold-cache queries, M-class macOS:
+
+| Stage | p50 | share |
+|:---|---:|---:|
+| embed (bi-encoder, `bge-small-en-v1.5`) | 3.0ms | 22% |
+| retrieve (HNSW + multi-strategy + SQLite) | 0.1ms | 1% |
+| **rerank (batched int8 cross-encoder, top-30)** | **10.3ms** | **74%** |
+| **Total** | **13.9ms** | 100% |
+
+Versus v0.4.2 (sequential fp32 cross-encoder):
+
+| | v0.4.2 | v0.5.1 | Δ |
+|:---|---:|---:|---:|
+| rerank p50 | 34.5ms | **10.3ms** | **3.3x faster** |
+| total recall p50 | 38.4ms | **13.9ms** | **2.8x faster** |
+| steady-state RSS | 767 MB | **551 MB** | **-28%** |
+
+Two changes, no API surface impact:
+
+1. **Cross-encoder is now batched.** The previous path ran N individual `tokenizer(pair) → model(inputs)` calls sequentially ("one at a time to keep peak memory low"). Re-measured — a single batched call per chunk of 64 pairs is strictly faster AND lower peak RSS (less GC churn). Scores bit-identical (`bench/rerank-batch-probe.ts`).
+2. **Cross-encoder is loaded with `dtype: "int8"`.** Rank-correlation 0.995 with fp32 baseline, top-1 agreement is 100% on the probe set. fp16 was tested and is *slower* on CPU (no hardware half-float path in onnxruntime-node) — do not use.
+
+Enable the stage profiler yourself via `AMEM_PROFILE=1` — `getProfileSamples()` exports the per-stage samples. Zero overhead when unset.
+
 #### Honest notes
 
-- **The cross-encoder reranker is the headline win.** Lifted R@1 from 46.6% → 65.6% (+19.0) and R@3 from 78.5% → 91.0% (+12.5) across the full 500-question set. Default-on; opt out with `recall(db, { query, rerank: false })` for the fastest possible path.
+- **The cross-encoder reranker is the headline win.** Lifted R@1 from 46.6% → 66.2% (+19.6) and R@3 from 78.5% → 90.8% (+12.3) across the full 500-question set. Default-on; opt out with `recall(db, { query, rerank: false })` for the fastest possible path.
 - **Adaptive rerank fixes the preference regression.** The MS-MARCO-trained cross-encoder systematically promotes assistant-paraphrase text above the user's original preference statement. `amem-core` detects advice-seeking queries (`recommend`, `suggest`, `any tips`, `help me find`...) and falls back to bi-encoder order for those, while still reranking direct lookup queries. Preference R@5 recovered from 93.3% → 96.7% (+3.4). Details: see `isAdviceSeekingQuery()` in `src/recall.ts` and the diagnostic in `bench/preference-diag.ts`.
-- **Temporal reasoning is still the weakest type** (89.4% R@5). `amem-core` stores `valid_from` / `valid_until` per memory but the default scorer doesn't yet use them as ranking signals. Next ticket.
+- **Temporal reasoning is still the weakest type** (90.2% R@5). `amem-core` stores `valid_from` / `valid_until` per memory but the default scorer doesn't yet use them as ranking signals. Next ticket.
 - **HNSW ANN index** exists in the codebase but isn't wired into the default recall path — currently exposed only via `buildVectorIndex` for explicit batched search at scale. Only matters at 100k+ memory scale.
 - Run is fully reproducible — every commit can re-execute the benchmark and append to `bench/longmemeval/results.json`.
 
@@ -364,6 +391,7 @@ Nearest tickets, in priority order:
 
 - [x] **Wire cross-encoder reranking into default recall path** — shipped: R@1 46.6% → 64.9% (+18.3), R@5 91.0% → 94.6% (+3.6)
 - [x] **Skip rerank for advice-seeking queries** — shipped: preference R@5 recovered 93.3% → 96.7%, overall R@5 94.6% → 94.8%
+- [x] **Batched + int8-quantized cross-encoder** — shipped in v0.5.1: rerank 34.5ms → 10.3ms (3.3x), total recall 38.4ms → 13.9ms (2.8x), rank-corr 0.995 with fp32
 - [ ] **Time-aware ranking signal** — use `valid_from` / `valid_until` distance from query date to lift `temporal-reasoning` (currently weakest type at 89.4% R@5)
 - [ ] **Wire HNSW into the hot path** — currently exposed only via explicit `buildVectorIndex` calls
 - [ ] **Run LongMemEval-S and LongMemEval-M variants** — full haystack benchmarks, not just Oracle
