@@ -54,12 +54,20 @@ interface QuestionResult {
   question_type: string;
   total_turns: number;
   gold_turns: number;
-  gold_rank: number; // best rank achieved by any gold turn; 0 = not found in top-10
+  gold_rank: number; // best rank achieved by any gold unit; 0 = not found in top-10
   hit_at_1: boolean;
   hit_at_3: boolean;
   hit_at_5: boolean;
   hit_at_10: boolean;
 }
+
+// Metric selection:
+//   "turn"    — R@K = did any top-K memory correspond to a gold `has_answer` turn?
+//               This is LongMemEval's paper metric (strict).
+//   "session" — R@K = did any top-K memory belong to a gold session id?
+//               This is the metric mempalace reports (less strict; easier to score).
+//               Use this for apples-to-apples comparison with session-level systems.
+type Metric = "turn" | "session";
 
 interface Aggregate {
   count: number;
@@ -100,17 +108,27 @@ function progressBar(done: number, total: number): string {
 
 // ── Per-question scoring ─────────────────────────────────────────────────────
 
-async function scoreQuestion(q: Question): Promise<QuestionResult> {
+async function scoreQuestion(q: Question, metric: Metric): Promise<QuestionResult> {
   // Fresh temp DB per question — guarantees no cross-question contamination
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lme-"));
   const dbPath = path.join(tmpDir, "q.db");
   const db: AmemDatabase = createDatabase(dbPath);
 
-  const goldIds = new Set<string>();
+  const goldIds = new Set<string>(); // turn-level gold memory ids
+  const goldSessionTags = new Set<string>(); // session-level gold session tags
+  const memoryIdToSessionTag = new Map<string, string>();
   let totalTurns = 0;
 
+  const goldSessionIdSet = new Set(q.answer_session_ids ?? []);
+
   try {
-    for (const session of q.haystack_sessions) {
+    for (let sIdx = 0; sIdx < q.haystack_sessions.length; sIdx++) {
+      const session = q.haystack_sessions[sIdx];
+      const sessionId = q.haystack_session_ids?.[sIdx] ?? `sess_${sIdx}`;
+      const sessionTag = `session:${sessionId}`;
+      const isGoldSession = goldSessionIdSet.has(sessionId);
+      if (isGoldSession) goldSessionTags.add(sessionTag);
+
       for (const turn of session) {
         totalTurns++;
         if (!turn.content || turn.content.trim().length === 0) continue;
@@ -119,12 +137,13 @@ async function scoreQuestion(q: Question): Promise<QuestionResult> {
         const id = db.insertMemory({
           content: turn.content,
           type: "fact",
-          tags: [turn.role],
+          tags: [turn.role, sessionTag],
           confidence: 0.8,
           source: "longmemeval",
           scope: "bench:lme",
           embedding,
         });
+        memoryIdToSessionTag.set(id, sessionTag);
 
         if (turn.has_answer) {
           goldIds.add(id);
@@ -132,8 +151,9 @@ async function scoreQuestion(q: Question): Promise<QuestionResult> {
       }
     }
 
-    if (goldIds.size === 0) {
-      // Some questions in oracle have no has_answer flag — treat as N/A
+    const goldCount = metric === "turn" ? goldIds.size : goldSessionTags.size;
+    if (goldCount === 0) {
+      // No gold signal → not scoreable
       return {
         question_id: q.question_id,
         question_type: q.question_type,
@@ -156,10 +176,21 @@ async function scoreQuestion(q: Question): Promise<QuestionResult> {
 
     const topIds = recalled.memories.map((m) => m.id as string);
     let bestRank = 0;
-    for (let i = 0; i < topIds.length; i++) {
-      if (goldIds.has(topIds[i])) {
-        bestRank = i + 1;
-        break;
+    if (metric === "turn") {
+      for (let i = 0; i < topIds.length; i++) {
+        if (goldIds.has(topIds[i])) {
+          bestRank = i + 1;
+          break;
+        }
+      }
+    } else {
+      // session-level: hit at rank i if the memory at rank i belongs to a gold session
+      for (let i = 0; i < topIds.length; i++) {
+        const tag = memoryIdToSessionTag.get(topIds[i]);
+        if (tag && goldSessionTags.has(tag)) {
+          bestRank = i + 1;
+          break;
+        }
       }
     }
 
@@ -167,7 +198,7 @@ async function scoreQuestion(q: Question): Promise<QuestionResult> {
       question_id: q.question_id,
       question_type: q.question_type,
       total_turns: totalTurns,
-      gold_turns: goldIds.size,
+      gold_turns: metric === "turn" ? goldIds.size : goldSessionTags.size,
       gold_rank: bestRank,
       hit_at_1: bestRank > 0 && bestRank <= 1,
       hit_at_3: bestRank > 0 && bestRank <= 3,
@@ -214,7 +245,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Metric selection
+  //   LME_METRIC=turn     (default) — paper metric, strict
+  //   LME_METRIC=session  — apples-to-apples with session-level systems like mempalace
+  const metric: Metric = (process.env.LME_METRIC ?? "turn") as Metric;
+  if (metric !== "turn" && metric !== "session") {
+    console.error(`[lme] unknown LME_METRIC: ${metric}. Use turn | session`);
+    process.exit(1);
+  }
+
   console.log(`[lme] variant: ${variant} (${datasetFilename})`);
+  console.log(`[lme] metric:  ${metric}-level recall`);
   console.log("[lme] loading dataset...");
   const dataset: Question[] = JSON.parse(fs.readFileSync(datasetPath, "utf8"));
   console.log(`[lme] loaded ${dataset.length} questions`);
@@ -243,7 +284,7 @@ async function main(): Promise<void> {
   for (let i = 0; i < work.length; i++) {
     const q = work[i];
     try {
-      const r = await scoreQuestion(q);
+      const r = await scoreQuestion(q, metric);
       results.push(r);
     } catch (err) {
       console.error(
@@ -279,7 +320,7 @@ async function main(): Promise<void> {
 
   // ── Print report ─────────────────────────────────────────────────────────
   console.log("─".repeat(70));
-  console.log("amem-core × LongMemEval (Oracle) — turn-level recall");
+  console.log(`amem-core × LongMemEval (${variant}) — ${metric}-level recall`);
   console.log("─".repeat(70));
   console.log(
     `dataset:  ${datasetFilename} (${dataset.length} questions, ${scoreable.length} scoreable)`,
@@ -314,7 +355,8 @@ async function main(): Promise<void> {
   console.log("─".repeat(70));
 
   // ── Save JSON report ─────────────────────────────────────────────────────
-  const reportPath = path.join(here, `results-${variant}.json`);
+  const metricSuffix = metric === "turn" ? "" : `-${metric}`;
+  const reportPath = path.join(here, `results-${variant}${metricSuffix}.json`);
   fs.writeFileSync(
     reportPath,
     JSON.stringify(
@@ -322,6 +364,7 @@ async function main(): Promise<void> {
         timestamp: new Date().toISOString(),
         dataset: datasetFilename,
         variant,
+        metric,
         total_questions: dataset.length,
         scored_questions: scoreable.length,
         runtime_seconds: (Date.now() - startedAt) / 1000,
