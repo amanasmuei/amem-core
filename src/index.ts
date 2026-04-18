@@ -197,8 +197,6 @@ export {
 // ── Mirror ──────────────────────────────────────────
 export {
   MirrorEngine,
-  slugifyName,
-  serializeMemoryFile,
   type MirrorOptions,
   type MirrorResult,
   type MirrorStatus,
