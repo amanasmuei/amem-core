@@ -114,6 +114,7 @@ export {
 export {
   discoverClaudeMemories,
   readClaudeMemoryDir,
+  parseFrontmatter,
   syncFromClaude,
   exportForTeam,
   importFromTeam,
