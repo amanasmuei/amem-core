@@ -266,3 +266,258 @@ describe("MirrorEngine.status", () => {
     expect(s.healthy).toBe(true);
   });
 });
+
+// ── fullMirror / exportSnapshot / INDEX.md ─────────────────────────────────
+//
+// Tests below seed the DB directly via `db.insertMemory(...)` (note: not
+// `saveMemory`). `insertMemory` auto-generates the memory id, so tests
+// capture the returned string and build expected file paths from it.
+
+describe("MirrorEngine.fullMirror", () => {
+  it("writes one file per memory currently in the DB", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, { dir: mirrorDir, includeIndex: false });
+
+    const id1 = db.insertMemory({
+      content: "A",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+    const id2 = db.insertMemory({
+      content: "B",
+      type: "decision",
+      tags: [],
+      confidence: 0.8,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+
+    const result = await engine.fullMirror();
+    expect(result.written).toBe(2);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(fs.existsSync(path.join(mirrorDir, "correction", `${id1}.md`))).toBe(true);
+    expect(fs.existsSync(path.join(mirrorDir, "decision", `${id2}.md`))).toBe(true);
+  });
+
+  it("filters by tier — skips memories outside the configured tier list", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, {
+      dir: mirrorDir,
+      tiers: ["core"],
+      includeIndex: false,
+    });
+
+    const idCore = db.insertMemory({
+      content: "keep",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+    const idArch = db.insertMemory({
+      content: "drop",
+      type: "correction",
+      tags: [],
+      confidence: 0.5,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "archival",
+    });
+
+    const result = await engine.fullMirror();
+    expect(result.written).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(fs.existsSync(path.join(mirrorDir, "correction", `${idCore}.md`))).toBe(true);
+    expect(fs.existsSync(path.join(mirrorDir, "correction", `${idArch}.md`))).toBe(false);
+  });
+
+  it("updates status().lastWriteAt after a bulk rebuild", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, { dir: mirrorDir, includeIndex: false });
+    db.insertMemory({
+      content: "x",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+
+    const before = Date.now();
+    await engine.fullMirror();
+    const s = engine.status();
+    expect(typeof s.lastWriteAt).toBe("number");
+    expect(s.lastWriteAt!).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("MirrorEngine.exportSnapshot", () => {
+  it("writes to the supplied dir and does not touch the engine's live mirror dir", async () => {
+    const liveDir = path.join(tempDir, "live-mirror");
+    const snapDir = path.join(tempDir, "snapshot");
+    const engine = new MirrorEngine(db, { dir: liveDir, includeIndex: false });
+    const id = db.insertMemory({
+      content: "snap me",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+
+    const result = await engine.exportSnapshot(snapDir);
+    expect(result.written).toBe(1);
+    expect(fs.existsSync(path.join(snapDir, "correction", `${id}.md`))).toBe(true);
+    // Live mirror dir never created — engine only touched the snapshot path.
+    expect(fs.existsSync(liveDir)).toBe(false);
+  });
+
+  it("always writes INDEX.md even when includeIndex is false on the engine", async () => {
+    const snapDir = path.join(tempDir, "snapshot");
+    const engine = new MirrorEngine(db, {
+      dir: path.join(tempDir, "live-mirror"),
+      includeIndex: false,
+    });
+    db.insertMemory({
+      content: "snapshot entry",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+
+    await engine.exportSnapshot(snapDir);
+    expect(fs.existsSync(path.join(snapDir, "INDEX.md"))).toBe(true);
+  });
+});
+
+describe("MirrorEngine INDEX.md generation", () => {
+  it("writes INDEX.md with the do-not-edit header and groups memories by type", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, { dir: mirrorDir });
+    const idC = db.insertMemory({
+      content: "correction entry",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+    const idD = db.insertMemory({
+      content: "decision entry",
+      type: "decision",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+
+    await engine.fullMirror();
+    const indexPath = path.join(mirrorDir, "INDEX.md");
+    expect(fs.existsSync(indexPath)).toBe(true);
+    const content = fs.readFileSync(indexPath, "utf-8");
+    expect(content).toContain(
+      "<!-- Auto-generated by amem-core/mirror.ts — do not edit -->",
+    );
+    expect(content).toContain("## correction");
+    expect(content).toContain("## decision");
+    expect(content).toContain(`correction/${idC}.md`);
+    expect(content).toContain(`decision/${idD}.md`);
+    expect(content).toMatch(/_Last generated: .* — 2 memories_/);
+  });
+
+  it("is NOT generated when includeIndex is false on fullMirror", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, { dir: mirrorDir, includeIndex: false });
+    db.insertMemory({
+      content: "x",
+      type: "correction",
+      tags: [],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+    await engine.fullMirror();
+    expect(fs.existsSync(path.join(mirrorDir, "INDEX.md"))).toBe(false);
+  });
+
+  it("is deterministic across runs (stable ordering, ignoring the timestamp line)", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, { dir: mirrorDir });
+    // Insert several memories in the same millisecond window to exercise
+    // secondary sort key. Without one, timestamp ties cause flaky ordering.
+    for (const content of ["alpha", "beta", "gamma"]) {
+      db.insertMemory({
+        content,
+        type: "correction",
+        tags: [],
+        confidence: 0.9,
+        source: "conversation",
+        embedding: null,
+        scope: "global",
+        tier: "core",
+      });
+    }
+
+    await engine.fullMirror();
+    const first = fs.readFileSync(path.join(mirrorDir, "INDEX.md"), "utf-8");
+    await engine.fullMirror();
+    const second = fs.readFileSync(path.join(mirrorDir, "INDEX.md"), "utf-8");
+
+    const stripTimestamp = (s: string) =>
+      s.replace(/_Last generated: [^_]+_/, "_Last generated: <stripped>_");
+    expect(stripTimestamp(second)).toBe(stripTimestamp(first));
+  });
+});
+
+describe("mirror round-trip via sync.ts parseFrontmatter", () => {
+  it("files written by MirrorEngine.fullMirror can be parsed back losslessly", async () => {
+    const mirrorDir = path.join(tempDir, "mirror");
+    const engine = new MirrorEngine(db, { dir: mirrorDir, includeIndex: false });
+    const id = db.insertMemory({
+      content: "Round trip test.",
+      type: "correction",
+      tags: ["t1"],
+      confidence: 0.9,
+      source: "conversation",
+      embedding: null,
+      scope: "global",
+      tier: "core",
+    });
+    await engine.fullMirror();
+
+    const filePath = path.join(mirrorDir, "correction", `${id}.md`);
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = parseFrontmatter(raw, filePath);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.name).toBe(id);
+    expect(parsed!.type).toBe("feedback");
+    expect(parsed!.body.trim()).toBe("Round trip test.");
+  });
+});

@@ -193,3 +193,14 @@ export {
   type ConversationTurn,
   type ExtractedMemory,
 } from "./extractor.js";
+
+// ── Mirror ──────────────────────────────────────────
+export {
+  MirrorEngine,
+  slugifyName,
+  serializeMemoryFile,
+  type MirrorOptions,
+  type MirrorResult,
+  type MirrorStatus,
+  type TierValue,
+} from "./mirror.js";
