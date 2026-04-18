@@ -31,20 +31,25 @@ export interface SerializeOptions {
   description?: string;
 }
 
+// Collapse any CR/LF in a frontmatter value so a user-authored tag or
+// description cannot inject a fake YAML line that parseFrontmatter's
+// line-by-line loop would mis-classify (e.g. hijacking the `type` field).
+const safeFm = (s: string): string => s.replace(/[\r\n]+/g, " ").trim();
+
 export function serializeMemoryFile(memory: Memory, opts: SerializeOptions = {}): string {
-  const claudeType = AMEM_TO_CLAUDE_TYPE[memory.type] ?? "reference";
+  const claudeType = AMEM_TO_CLAUDE_TYPE[memory.type];
   const description = opts.description ?? memory.content.split("\n")[0].slice(0, 120);
   const createdISO = new Date(memory.createdAt).toISOString();
 
   const fm: string[] = [
-    `name: ${memory.id}`,
-    `description: ${description.replace(/\n/g, " ")}`,
+    `name: ${safeFm(memory.id)}`,
+    `description: ${safeFm(description)}`,
     `type: ${claudeType}`,
-    `amem_id: ${memory.id}`,
+    `amem_id: ${safeFm(memory.id)}`,
     `amem_type: ${memory.type}`,
     `amem_confidence: ${memory.confidence}`,
-    `amem_tier: ${memory.tier}`,
-    `amem_tags: ${memory.tags.join(", ")}`,
+    `amem_tier: ${safeFm(memory.tier)}`,
+    `amem_tags: ${memory.tags.map(safeFm).join(", ")}`,
     `amem_created: ${createdISO}`,
   ];
 

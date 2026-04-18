@@ -66,4 +66,26 @@ describe("serializeMemoryFile", () => {
     expect(serialized).toContain("amem_tier: core");
     expect(serialized).toContain("amem_tags: communication, style");
   });
+
+  it("neutralizes newline injection in tags and description (YAML safety)", () => {
+    const mem = fakeMemory({
+      tags: ["ok", "evil\ntype: pattern"],
+    });
+    const serialized = serializeMemoryFile(mem, {
+      description: "first line\r\nmalicious: second line",
+    });
+    const parsed = parseFrontmatter(serialized, "/fake.md");
+    expect(parsed).not.toBeNull();
+    // type must NOT be hijacked to "pattern" — it should remain the expected Claude vocab
+    expect(parsed!.type).toBe("feedback");
+  });
+
+  it("serializes memories with empty tags without breaking the parser", () => {
+    const mem = fakeMemory({ tags: [] });
+    const serialized = serializeMemoryFile(mem);
+    const parsed = parseFrontmatter(serialized, "/fake.md");
+    expect(parsed).not.toBeNull();
+    expect(parsed!.type).toBe("feedback");
+    expect(serialized).toContain("amem_tags: ");
+  });
 });
