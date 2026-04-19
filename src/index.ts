@@ -114,6 +114,7 @@ export {
 export {
   discoverClaudeMemories,
   readClaudeMemoryDir,
+  parseFrontmatter,
   syncFromClaude,
   exportForTeam,
   importFromTeam,
@@ -192,3 +193,12 @@ export {
   type ConversationTurn,
   type ExtractedMemory,
 } from "./extractor.js";
+
+// ── Mirror ──────────────────────────────────────────
+export {
+  MirrorEngine,
+  type MirrorOptions,
+  type MirrorResult,
+  type MirrorStatus,
+  type TierValue,
+} from "./mirror.js";

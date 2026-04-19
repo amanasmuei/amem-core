@@ -53,7 +53,7 @@ interface ClaudeMemoryFile {
   filePath: string;
 }
 
-function parseFrontmatter(content: string, filePath: string): ClaudeMemoryFile | null {
+export function parseFrontmatter(content: string, filePath: string): ClaudeMemoryFile | null {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
   if (!match) return null;
 

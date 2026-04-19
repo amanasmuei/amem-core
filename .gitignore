@@ -8,3 +8,4 @@ bench/longmemeval/longmemeval_s_cleaned.json
 bench/longmemeval/longmemeval_m_cleaned.json
 bench/longmemeval/results.json
 bench/longmemeval/results-*.json
+.worktrees/
