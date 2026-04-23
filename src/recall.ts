@@ -50,6 +50,58 @@ export interface RecallOptions {
    * for higher precision. Typical lift: +10-20 points on R@1.
    */
   rerank?: boolean;
+  /**
+   * Experimental: for advice-seeking queries, blend the bi-encoder
+   * score with the cross-encoder score instead of disabling the
+   * cross-encoder entirely. Range [0, 1]:
+   *
+   *   0.0  — skip rerank on advice queries (DEFAULT — preserves the
+   *          published 97.8% R@5 LongMemEval-S session-level result)
+   *   0.5  — equal blend of bi-encoder (original) and cross-encoder
+   *   1.0  — full cross-encoder replacement, same as non-advice queries
+   *
+   * Retrospective queries (e.g. "the one you recommended") are NOT
+   * advice-seeking and always get full reranking regardless of this
+   * setting. Validate with `bench/longmemeval` on your own data before
+   * raising the default.
+   */
+  adviceRerankBlend?: number;
+}
+
+/**
+ * Min-max normalize two score arrays to [0,1] and combine them with
+ * `blend` as the cross-encoder weight (so `blend=0` returns the pure
+ * bi-encoder signal, `blend=1` the pure cross-encoder signal).
+ *
+ * Exported for tests and for consumers who want to run the blend
+ * outside the recall pipeline. `blend` is clamped to [0,1]. When all
+ * scores in an array are equal the normalized value is 0.5, which
+ * keeps the blend well-defined instead of dividing by zero.
+ */
+export function blendScores(
+  biScores: number[],
+  ceScores: number[],
+  blend: number,
+): number[] {
+  if (biScores.length !== ceScores.length) {
+    throw new Error("blendScores: arrays must be the same length");
+  }
+  const b = Math.max(0, Math.min(1, blend));
+  if (biScores.length === 0) return [];
+
+  const biMin = Math.min(...biScores);
+  const biMax = Math.max(...biScores);
+  const ceMin = Math.min(...ceScores);
+  const ceMax = Math.max(...ceScores);
+
+  const norm = (v: number, min: number, max: number) =>
+    max === min ? 0.5 : (v - min) / (max - min);
+
+  return biScores.map((bi, i) => {
+    const biNorm = norm(bi, biMin, biMax);
+    const ceNorm = norm(ceScores[i], ceMin, ceMax);
+    return b * ceNorm + (1 - b) * biNorm;
+  });
 }
 
 /**
@@ -138,12 +190,18 @@ export async function recall(
   const {
     query, limit = 10, type, tag, minConfidence,
     compact = true, explain = false, scope, rerank = true,
+    adviceRerankBlend = 0,
   } = opts;
 
-  // Auto-disable reranking for advice-seeking queries where the
-  // MS-MARCO cross-encoder systematically picks assistant-paraphrase
-  // text over the user's original preference statement.
-  const rerankActive = rerank && !isAdviceSeekingQuery(query);
+  // Advice-seeking queries historically need the cross-encoder disabled
+  // — it systematically picks assistant-paraphrase text over the user's
+  // original preference statement on MS-MARCO-trained heads. With the
+  // blend knob, callers can opt into a bi-encoder/cross-encoder mix
+  // that keeps the user-turn signal while borrowing cross-encoder
+  // precision. Default blend=0 preserves the published behavior.
+  const isAdvice = isAdviceSeekingQuery(query);
+  const adviceBlend = Math.max(0, Math.min(1, adviceRerankBlend));
+  const rerankActive = rerank && (!isAdvice || adviceBlend > 0);
 
   const queryEmbedding = await markAsync("embed", () => generateEmbedding(query));
 
@@ -165,22 +223,48 @@ export async function recall(
   // Rerank top-K with cross-encoder if enabled and we have enough candidates
   let results: RecalledMemory[];
   if (rerankActive && candidates.length > 1) {
+    // Over-fetch when reranking so the reranker sees `limit * RERANK_OVERFETCH`
+    // candidates; for blended advice queries we pass `candidates.length` so
+    // the cross-encoder sees the same pool the bi-encoder saw, keeping the
+    // two score vectors aligned.
     const rerankInput = candidates.map((c) => ({
       id: c.id,
       content: c.content,
       score: c.score,
     }));
-    const reranked = await markAsync("rerank", () => rerankWithCrossEncoder(query, rerankInput, limit));
-    // Map reranked results back to RecalledMemory, preserving all original fields
-    // but using the cross-encoder score
+    const rerankTopK = isAdvice && adviceBlend < 1 ? candidates.length : limit;
+    const reranked = await markAsync("rerank", () => rerankWithCrossEncoder(query, rerankInput, rerankTopK));
     const byId = new Map(candidates.map((c) => [c.id, c]));
-    results = reranked
-      .map((r) => {
+
+    if (isAdvice && adviceBlend < 1) {
+      // Blend bi-encoder (original) and cross-encoder scores. Only memories
+      // that appear in both vectors are blended — drop-ons from `reranked`
+      // that can't be resolved back to a bi-encoder score are ignored.
+      const pairs: Array<{ mem: RecalledMemory; bi: number; ce: number }> = [];
+      for (const r of reranked) {
         const orig = byId.get(r.id);
-        if (!orig) return null;
-        return { ...orig, score: r.score };
-      })
-      .filter((r): r is RecalledMemory => r !== null);
+        if (!orig) continue;
+        pairs.push({ mem: orig, bi: orig.score, ce: r.score });
+      }
+      const blended = blendScores(
+        pairs.map((p) => p.bi),
+        pairs.map((p) => p.ce),
+        adviceBlend,
+      );
+      results = pairs
+        .map((p, i) => ({ ...p.mem, score: blended[i] }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+    } else {
+      // Full cross-encoder replacement — existing non-advice behavior.
+      results = reranked
+        .map((r) => {
+          const orig = byId.get(r.id);
+          if (!orig) return null;
+          return { ...orig, score: r.score };
+        })
+        .filter((r): r is RecalledMemory => r !== null);
+    }
   } else {
     results = candidates.slice(0, limit);
   }

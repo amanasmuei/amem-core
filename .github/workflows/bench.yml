@@ -1,0 +1,101 @@
+name: Benchmark
+
+# Quick recall benchmark: hand-crafted 20-memory / 10-query proof-of-life.
+# Runs on every PR and push to master so regressions in the retrieval
+# pipeline surface immediately. The full LongMemEval bench is a separate
+# workflow (bench-longmemeval.yml) that's manually triggered — too
+# expensive (500 questions, ~4 min) for every PR.
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "bench/**"
+      - "package.json"
+      - ".github/workflows/bench.yml"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quick-recall:
+    name: Quick recall (20 memories, 10 queries)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          # Models land under XDG cache. Cache-hit skips the ~30s download.
+          path: ~/.cache/huggingface
+          key: hf-models-bge-small-msmarco-minilm-v1
+          restore-keys: |
+            hf-models-
+
+      - name: Run quick recall benchmark
+        env:
+          BENCH_JSON: bench-report.json
+          # Floor chosen conservatively below the expected ~100% R@5 with
+          # models cached. Any true regression will drop well below 0.80.
+          BENCH_MIN_R_AT_5: "0.80"
+        run: npm run bench:quick
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-recall-report
+          path: bench-report.json
+          retention-days: 30
+
+      - name: Post summary
+        if: always()
+        run: |
+          if [ ! -f bench-report.json ]; then
+            echo "No bench report produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("bench-report.json", "utf8"));
+            const pct = (x) => (x * 100).toFixed(1) + "%";
+            const rows = [
+              ["R@1",  pct(r.rAt1)],
+              ["R@3",  pct(r.rAt3)],
+              ["R@5",  pct(r.rAt5)],
+              ["R@10", pct(r.rAt10)],
+            ];
+            const lines = [];
+            lines.push("## Quick recall benchmark");
+            lines.push("");
+            lines.push(`Dataset: 20 memories, ${r.total} queries.`);
+            lines.push("");
+            lines.push("| Metric | Score |");
+            lines.push("| --- | ---: |");
+            for (const [k, v] of rows) lines.push(`| **${k}** | ${v} |`);
+            lines.push("");
+            lines.push("### Per-query breakdown");
+            lines.push("");
+            lines.push("| Query | Gold | Rank |");
+            lines.push("| --- | --- | ---: |");
+            for (const q of r.results) {
+              const rank = q.goldRank === 0 ? "MISS" : "#" + q.goldRank;
+              lines.push(`| ${q.query} | \`${q.goldKey}\` | ${rank} |`);
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+          '

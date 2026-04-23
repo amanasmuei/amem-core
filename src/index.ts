@@ -21,6 +21,7 @@ export {
   type Memory,
   type ScoreInput,
   computeScore,
+  type ConflictAction,
   type ConflictResult,
   detectConflict,
   type RecallOptions as MemoryRecallOptions,
@@ -77,6 +78,8 @@ export {
 // ── Recall (high-level) ─────────────────────────────
 export {
   recall,
+  blendScores,
+  isAdviceSeekingQuery,
   type RecallOptions,
   type RecallResult,
   getProfileSamples,
@@ -151,6 +154,16 @@ export {
   type DiagnosticReport,
 } from "./doctor.js";
 
+// ── Verify (Topology filesystem check) ──────────────
+export {
+  extractPaths,
+  verifyTopology,
+  type VerifyOptions,
+  type VerifyResult,
+  type VerifyItem,
+  type VerifyStatus,
+} from "./verify.js";
+
 // ── Helpers ─────────────────────────────────────────
 export {
   MEMORY_TYPES,
@@ -190,9 +203,20 @@ export {
 // ── Extractor ───────────────────────────────────────
 export {
   extractMemories,
+  ruleBasedExtractor,
   type ConversationTurn,
   type ExtractedMemory,
+  type Extractor,
 } from "./extractor.js";
+
+// ── Hooks ───────────────────────────────────────────
+export {
+  isHookEnabled,
+  runAutoExtract,
+  type HookEvent,
+  type AutoExtractOptions,
+  type AutoExtractResult,
+} from "./hooks.js";
 
 // ── Mirror ──────────────────────────────────────────
 export {

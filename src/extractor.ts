@@ -110,3 +110,36 @@ export function extractMemories(turns: ConversationTurn[]): ExtractedMemory[] {
 
   return extracted;
 }
+
+/**
+ * Pluggable extractor interface.
+ *
+ * amem-core ships a rule-based extractor (`ruleBasedExtractor`) that has
+ * zero external dependencies. Downstream consumers — e.g. the amem MCP
+ * server or an application integrating amem directly — can supply their
+ * own implementation (LLM-backed, retrieval-augmented, domain-specific)
+ * without amem-core pulling in any inference dependency.
+ *
+ * Contracts:
+ *   - `extract` may be sync or async; callers must await it.
+ *   - Returning an empty array is the correct "nothing to extract" signal.
+ *   - Throwing is allowed — callers decide how to handle failure (the
+ *     built-in `runAutoExtract` isolates failures so a bad extractor
+ *     cannot poison the store).
+ *   - `name` should be short, stable, and suitable for logs/metrics.
+ */
+export interface Extractor {
+  readonly name: string;
+  extract(turns: ConversationTurn[]): Promise<ExtractedMemory[]> | ExtractedMemory[];
+}
+
+/**
+ * The default, dependency-free, rule-based extractor. A thin adapter
+ * over `extractMemories` so it satisfies the `Extractor` interface.
+ */
+export const ruleBasedExtractor: Extractor = {
+  name: "rule-based",
+  extract(turns) {
+    return extractMemories(turns);
+  },
+};

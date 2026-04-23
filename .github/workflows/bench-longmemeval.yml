@@ -1,0 +1,85 @@
+name: Benchmark - LongMemEval
+
+# Full LongMemEval Oracle benchmark: 500 questions, ~22 turns each.
+# Runs ~4 minutes on a fresh runner (plus ~15s HF model download +
+# ~5s dataset download — both cached between runs). Manually
+# triggered or nightly on master; never gates PRs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Question sample size (empty = all 500)"
+        required: false
+        default: ""
+      metric:
+        description: "Metric: turn (paper) or session (mempalace-comparable)"
+        required: false
+        default: "session"
+        type: choice
+        options: [turn, session]
+  schedule:
+    # Nightly at 06:00 UTC so the README numbers stay honest without
+    # asking a human to remember. Skip on forks where secrets aren't
+    # available — the job itself uses none, but keeps noise down.
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  longmemeval:
+    name: LongMemEval Oracle
+    # Don't run on forks' scheduled triggers.
+    if: github.event_name != 'schedule' || github.repository == 'amanasmuei/amem-core'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-bge-small-msmarco-minilm-v1
+          restore-keys: |
+            hf-models-
+
+      - name: Cache LongMemEval dataset
+        uses: actions/cache@v4
+        with:
+          path: bench/longmemeval/longmemeval_oracle.json
+          key: longmemeval-oracle-v1
+
+      - name: Download LongMemEval dataset (if not cached)
+        run: |
+          if [ ! -f bench/longmemeval/longmemeval_oracle.json ]; then
+            curl -fsSL -o bench/longmemeval/longmemeval_oracle.json \
+              https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
+          else
+            echo "Using cached dataset."
+          fi
+
+      - name: Run LongMemEval
+        env:
+          LME_SAMPLE: ${{ github.event.inputs.sample }}
+          LME_METRIC: ${{ github.event.inputs.metric || 'session' }}
+        run: npm run bench:longmemeval
+
+      - name: Upload LongMemEval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: longmemeval-report
+          path: bench/longmemeval/results-*.json
+          retention-days: 90
+          if-no-files-found: warn

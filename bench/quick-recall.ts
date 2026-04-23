@@ -271,10 +271,52 @@ function printReport(r: ScoreReport): void {
   console.log("─".repeat(60));
 }
 
+// ── CI support ──────────────────────────────────────────────────────────────
+//
+// Two optional env vars keep local developer usage unchanged while giving
+// CI a machine-readable output and a simple regression gate:
+//
+//   BENCH_JSON=path/to/report.json
+//     Writes the full ScoreReport as JSON. Used by the benchmark workflow
+//     to upload an artifact and post a step-summary table.
+//
+//   BENCH_MIN_R_AT_5=0.80
+//     Fails the process with exit code 2 when R@5 drops below the
+//     threshold. Keeps regressions visible in PR checks without turning
+//     the benchmark into a flaky gate — callers pick their own floor.
+
+function writeJsonReport(report: ScoreReport, targetPath: string): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, JSON.stringify(report, null, 2) + "\n");
+  console.log(`[bench] wrote JSON report: ${targetPath}`);
+}
+
+function enforceThreshold(report: ScoreReport, rawFloor: string): number {
+  const floor = Number(rawFloor);
+  if (!Number.isFinite(floor) || floor < 0 || floor > 1) {
+    console.error(`[bench] BENCH_MIN_R_AT_5='${rawFloor}' is not a number in [0,1]`);
+    return 2;
+  }
+  if (report.rAt5 < floor) {
+    console.error(
+      `[bench] R@5 ${pct(report.rAt5)} is below the configured floor ${pct(floor)} — failing.`,
+    );
+    return 2;
+  }
+  console.log(`[bench] R@5 ${pct(report.rAt5)} meets the configured floor ${pct(floor)}.`);
+  return 0;
+}
+
 run()
   .then((report) => {
     printReport(report);
-    process.exit(0);
+
+    const jsonTarget = process.env.BENCH_JSON;
+    if (jsonTarget) writeJsonReport(report, jsonTarget);
+
+    const floor = process.env.BENCH_MIN_R_AT_5;
+    const exit = floor ? enforceThreshold(report, floor) : 0;
+    process.exit(exit);
   })
   .catch((err) => {
     console.error("[bench] failed:", err);

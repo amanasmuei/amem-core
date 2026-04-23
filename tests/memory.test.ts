@@ -126,6 +126,52 @@ describe("detectConflict", () => {
     const result = detectConflict("a", "b", 0.85);
     expect(result.isConflict).toBe(false);
   });
+
+  // Tiered action (new contract)
+
+  it("action=flag when similarity > 0.85 with different content", () => {
+    const r = detectConflict("Use pnpm", "Use npm", 0.9);
+    expect(r.action).toBe("flag");
+    expect(r.isConflict).toBe(true);
+  });
+
+  it("action=reinforce for identical content", () => {
+    const r = detectConflict("same text", "same text", 1.0);
+    expect(r.action).toBe("reinforce");
+    expect(r.isConflict).toBe(false);
+  });
+
+  it("action=reinforce for different content in the 0.80-0.85 band", () => {
+    const r = detectConflict("prefer pnpm", "prefer npm", 0.83);
+    expect(r.action).toBe("reinforce");
+    expect(r.isConflict).toBe(false);
+  });
+
+  it("action=touch in the 0.60-0.80 band", () => {
+    const r = detectConflict("alpha", "beta", 0.7);
+    expect(r.action).toBe("touch");
+    expect(r.isConflict).toBe(false);
+  });
+
+  it("action=touch at the 0.60 lower boundary", () => {
+    const r = detectConflict("alpha", "beta", 0.60);
+    expect(r.action).toBe("touch");
+  });
+
+  it("action=none below 0.60", () => {
+    const r = detectConflict("alpha", "omega", 0.4);
+    expect(r.action).toBe("none");
+    expect(r.isConflict).toBe(false);
+  });
+
+  it("tier boundaries are strictly ordered: flag > reinforce > touch > none", () => {
+    expect(detectConflict("a", "b", 0.86).action).toBe("flag");
+    expect(detectConflict("a", "b", 0.85).action).toBe("reinforce");
+    expect(detectConflict("a", "b", 0.81).action).toBe("reinforce");
+    expect(detectConflict("a", "b", 0.80).action).toBe("touch");
+    expect(detectConflict("a", "b", 0.61).action).toBe("touch");
+    expect(detectConflict("a", "b", 0.59).action).toBe("none");
+  });
 });
 
 describe("recallMemories", () => {
@@ -195,6 +241,31 @@ describe("recallMemories", () => {
     expect(results[0].content).toContain("TypeScript");
     // Keyword match gives relevance of 0.75 (higher than default 0.5)
     expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  it("expanded synonyms drive keyword recall (auth -> authentication)", () => {
+    // Query term "auth" should surface "authentication" content via the
+    // synonym expansion wired into the default keyword path.
+    db.insertMemory({ content: "authentication flow uses JWT", type: "pattern", tags: [], confidence: 0.8, source: "t", embedding: null, scope: "global" });
+    db.insertMemory({ content: "Rust ownership rules", type: "fact", tags: [], confidence: 0.8, source: "t", embedding: null, scope: "global" });
+
+    const results = recallMemories(db, { query: "auth", limit: 10 });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].content).toContain("authentication");
+  });
+
+  it("expanded stems drive keyword recall (running -> run)", () => {
+    // "running" stems to "runn" (basic stemmer strips -ing). To make the
+    // test deterministic we pick a pair where the stem overlaps both query
+    // and content: "configuration" -> "configura" (strips -tion).
+    db.insertMemory({ content: "configura step enables strict mode", type: "fact", tags: [], confidence: 0.8, source: "t", embedding: null, scope: "global" });
+    db.insertMemory({ content: "unrelated rust topic", type: "fact", tags: [], confidence: 0.8, source: "t", embedding: null, scope: "global" });
+
+    const results = recallMemories(db, { query: "configuration", limit: 10 });
+    // "configuration" expands to {configuration, configura}. "configura" is
+    // a substring of both the query (via stem) and the stored content.
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].content).toContain("configura");
   });
 
   it("filters by scope", () => {

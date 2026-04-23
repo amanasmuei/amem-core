@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAdviceSeekingQuery } from "../src/recall.js";
+import { blendScores, isAdviceSeekingQuery } from "../src/recall.js";
 
 describe("isAdviceSeekingQuery", () => {
   describe("matches advice-seeking queries", () => {
@@ -72,5 +72,69 @@ describe("isAdviceSeekingQuery", () => {
       expect(isAdviceSeekingQuery("CAN YOU RECOMMEND A BOOK?")).toBe(true);
       expect(isAdviceSeekingQuery("any ADVICE would help")).toBe(true);
     });
+  });
+});
+
+describe("blendScores", () => {
+  it("blend=0 returns the pure bi-encoder signal (normalized)", () => {
+    // bi=[1,2,3] normalizes to [0, 0.5, 1]. ce values are irrelevant at b=0.
+    const out = blendScores([1, 2, 3], [100, 50, -20], 0);
+    expect(out[0]).toBeCloseTo(0, 5);
+    expect(out[1]).toBeCloseTo(0.5, 5);
+    expect(out[2]).toBeCloseTo(1, 5);
+  });
+
+  it("blend=1 returns the pure cross-encoder signal (normalized)", () => {
+    // ce=[100,50,-20] normalizes to [1, 0.583..., 0]. bi is irrelevant at b=1.
+    const out = blendScores([0.9, 0.5, 0.1], [100, 50, -20], 1);
+    expect(out[0]).toBeCloseTo(1, 5);
+    expect(out[1]).toBeCloseTo((50 - -20) / (100 - -20), 5);
+    expect(out[2]).toBeCloseTo(0, 5);
+  });
+
+  it("blend=0.5 equally weights normalized bi and ce", () => {
+    // bi=[0,1,2] -> [0, 0.5, 1]; ce=[2,1,0] -> [1, 0.5, 0]
+    // 0.5 blend -> [0.5, 0.5, 0.5]
+    const out = blendScores([0, 1, 2], [2, 1, 0], 0.5);
+    expect(out[0]).toBeCloseTo(0.5, 5);
+    expect(out[1]).toBeCloseTo(0.5, 5);
+    expect(out[2]).toBeCloseTo(0.5, 5);
+  });
+
+  it("preserves relative order when ce agrees with bi", () => {
+    const out = blendScores([0.1, 0.5, 0.9], [-5, 0, 6], 0.5);
+    expect(out[0]).toBeLessThan(out[1]);
+    expect(out[1]).toBeLessThan(out[2]);
+  });
+
+  it("flips order when ce disagrees strongly and blend favors ce", () => {
+    // bi prefers index 2; ce prefers index 0. blend=0.9 -> ce dominates.
+    const out = blendScores([0.1, 0.5, 0.9], [10, 0, -10], 0.9);
+    expect(out[0]).toBeGreaterThan(out[2]);
+  });
+
+  it("clamps blend > 1 to 1", () => {
+    const clamped = blendScores([0.1, 0.9], [100, 0], 1.5);
+    const exact = blendScores([0.1, 0.9], [100, 0], 1);
+    expect(clamped).toEqual(exact);
+  });
+
+  it("clamps blend < 0 to 0", () => {
+    const clamped = blendScores([0.1, 0.9], [100, 0], -0.3);
+    const exact = blendScores([0.1, 0.9], [100, 0], 0);
+    expect(clamped).toEqual(exact);
+  });
+
+  it("returns 0.5 for every element when all scores are equal in an array", () => {
+    const out = blendScores([0.5, 0.5, 0.5], [2, 2, 2], 0.5);
+    expect(out).toEqual([0.5, 0.5, 0.5]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(blendScores([], [], 0.5)).toEqual([]);
+  });
+
+  it("throws when input arrays are different lengths", () => {
+    expect(() => blendScores([0.1, 0.2], [1, 2, 3], 0.5)).toThrow();
   });
 });
