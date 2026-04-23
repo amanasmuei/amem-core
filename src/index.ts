@@ -152,6 +152,16 @@ export {
   type DiagnosticReport,
 } from "./doctor.js";
 
+// ── Verify (Topology filesystem check) ──────────────
+export {
+  extractPaths,
+  verifyTopology,
+  type VerifyOptions,
+  type VerifyResult,
+  type VerifyItem,
+  type VerifyStatus,
+} from "./verify.js";
+
 // ── Helpers ─────────────────────────────────────────
 export {
   MEMORY_TYPES,
