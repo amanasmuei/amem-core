@@ -6,6 +6,7 @@ import {
   isHookEnabled,
   runAutoExtract,
 } from "../src/hooks.js";
+import type { Extractor, ExtractedMemory } from "../src/extractor.js";
 import { getDefaultConfig, resetConfigCache } from "../src/config.js";
 import { createDatabase, type AmemDatabase } from "../src/database.js";
 
@@ -87,7 +88,13 @@ describe("runAutoExtract", () => {
     });
 
     const result = await runAutoExtract(db);
-    expect(result).toEqual({ extracted: 0, stored: 0, reinforced: 0, skipped: 0 });
+    expect(result).toEqual({
+      extractor: "rule-based",
+      extracted: 0,
+      stored: 0,
+      reinforced: 0,
+      skipped: 0,
+    });
   });
 
   it("extracts and stores memories from recent log entries", async () => {
@@ -119,7 +126,13 @@ describe("runAutoExtract", () => {
 
   it("returns zeroes when there are no log entries", async () => {
     const result = await runAutoExtract(db);
-    expect(result).toEqual({ extracted: 0, stored: 0, reinforced: 0, skipped: 0 });
+    expect(result).toEqual({
+      extractor: "rule-based",
+      extracted: 0,
+      stored: 0,
+      reinforced: 0,
+      skipped: 0,
+    });
   });
 
   it("scopes extraction to a single session when sessionId is passed", async () => {
@@ -157,5 +170,100 @@ describe("runAutoExtract", () => {
 
     const lowBar = await runAutoExtract(db, { minConfidence: 0.5 });
     expect(lowBar.extracted).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses a custom Extractor when provided", async () => {
+    db.appendLog({
+      sessionId: "s1",
+      role: "user",
+      content: "totally benign message that triggers nothing",
+      project: "global",
+    });
+
+    const calls: number[] = [];
+    const custom: Extractor = {
+      name: "test-custom",
+      async extract(turns) {
+        calls.push(turns.length);
+        const out: ExtractedMemory[] = [{
+          content: "synthesized-by-custom-extractor",
+          type: "fact",
+          confidence: 0.9,
+          tags: ["custom"],
+          source: "test",
+        }];
+        return out;
+      },
+    };
+
+    const result = await runAutoExtract(db, { extractor: custom, minConfidence: 0.5 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeGreaterThan(0);
+    expect(result.extractor).toBe("test-custom");
+    expect(result.extracted).toBe(1);
+    expect(result.stored).toBe(1);
+  });
+
+  it("defaults to ruleBasedExtractor when none supplied", async () => {
+    db.appendLog({
+      sessionId: "s1",
+      role: "user",
+      content: "I prefer tabs over spaces in this codebase",
+      project: "global",
+    });
+
+    const result = await runAutoExtract(db, { minConfidence: 0.5 });
+    expect(result.extractor).toBe("rule-based");
+    expect(result.extracted).toBeGreaterThanOrEqual(1);
+  });
+
+  it("isolates extractor failures without crashing or storing", async () => {
+    db.appendLog({
+      sessionId: "s1",
+      role: "user",
+      content: "I prefer tabs over spaces in this codebase",
+      project: "global",
+    });
+
+    const broken: Extractor = {
+      name: "broken",
+      extract() {
+        throw new Error("intentional test failure");
+      },
+    };
+
+    const before = db.getStats().total;
+    const result = await runAutoExtract(db, { extractor: broken, minConfidence: 0.5 });
+    expect(result.extractor).toBe("broken");
+    expect(result.extracted).toBe(0);
+    expect(result.stored).toBe(0);
+    expect(result.extractorError).toBe("intentional test failure");
+    expect(db.getStats().total).toBe(before);
+  });
+
+  it("supports a synchronous Extractor (returns array, not Promise)", async () => {
+    db.appendLog({
+      sessionId: "s1",
+      role: "user",
+      content: "some log line",
+      project: "global",
+    });
+
+    const sync: Extractor = {
+      name: "sync-custom",
+      extract() {
+        return [{
+          content: "sync-extractor-output",
+          type: "pattern",
+          confidence: 0.75,
+          tags: [],
+          source: "sync",
+        }];
+      },
+    };
+
+    const result = await runAutoExtract(db, { extractor: sync, minConfidence: 0.5 });
+    expect(result.extractor).toBe("sync-custom");
+    expect(result.extracted).toBe(1);
   });
 });

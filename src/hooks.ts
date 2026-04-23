@@ -1,6 +1,10 @@
 import type { AmemDatabase } from "./database.js";
 import { loadConfig, type AmemConfig } from "./config.js";
-import { extractMemories, type ConversationTurn } from "./extractor.js";
+import {
+  ruleBasedExtractor,
+  type ConversationTurn,
+  type Extractor,
+} from "./extractor.js";
 import { storeMemory } from "./store.js";
 
 /**
@@ -48,9 +52,17 @@ export interface AutoExtractOptions {
   limit?: number;
   /** Minimum confidence for extracted memories to be stored. Defaults to 0.6. */
   minConfidence?: number;
+  /**
+   * Pluggable extractor. Defaults to the built-in rule-based extractor.
+   * Supply an LLM-backed or domain-specific implementation to upgrade
+   * extraction quality without adding dependencies to amem-core.
+   */
+  extractor?: Extractor;
 }
 
 export interface AutoExtractResult {
+  /** Name of the extractor that produced these candidates. */
+  extractor: string;
   /** Total candidates emitted by the extractor. */
   extracted: number;
   /** Candidates that resulted in a new stored memory. */
@@ -59,6 +71,8 @@ export interface AutoExtractResult {
   reinforced: number;
   /** Candidates dropped by privacy rules. */
   skipped: number;
+  /** True when the extractor threw — in that case the other counts are zero. */
+  extractorError?: string;
 }
 
 /**
@@ -74,9 +88,11 @@ export async function runAutoExtract(
   db: AmemDatabase,
   opts: AutoExtractOptions = {},
 ): Promise<AutoExtractResult> {
+  const extractor = opts.extractor ?? ruleBasedExtractor;
+
   const cfg = loadConfig();
   if (!cfg.hooks.enabled) {
-    return { extracted: 0, stored: 0, reinforced: 0, skipped: 0 };
+    return { extractor: extractor.name, extracted: 0, stored: 0, reinforced: 0, skipped: 0 };
   }
 
   const limit = opts.limit ?? 100;
@@ -87,7 +103,7 @@ export async function runAutoExtract(
     : db.getRecentLog(limit);
 
   if (logs.length === 0) {
-    return { extracted: 0, stored: 0, reinforced: 0, skipped: 0 };
+    return { extractor: extractor.name, extracted: 0, stored: 0, reinforced: 0, skipped: 0 };
   }
 
   const turns: ConversationTurn[] = logs.map((l) => ({
@@ -95,9 +111,24 @@ export async function runAutoExtract(
     content: l.content,
   }));
 
-  const candidates = extractMemories(turns).filter(
-    (m) => m.confidence >= minConfidence,
-  );
+  // Isolate extractor failures so a buggy custom extractor cannot
+  // poison the store or crash the hook loop. The rule-based default
+  // is sync and non-throwing, so this costs nothing in the common path.
+  let candidates;
+  try {
+    candidates = (await extractor.extract(turns)).filter(
+      (m) => m.confidence >= minConfidence,
+    );
+  } catch (err) {
+    return {
+      extractor: extractor.name,
+      extracted: 0,
+      stored: 0,
+      reinforced: 0,
+      skipped: 0,
+      extractorError: err instanceof Error ? err.message : String(err),
+    };
+  }
 
   let stored = 0;
   let reinforced = 0;
@@ -118,6 +149,7 @@ export async function runAutoExtract(
   }
 
   return {
+    extractor: extractor.name,
     extracted: candidates.length,
     stored,
     reinforced,

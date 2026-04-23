@@ -191,8 +191,10 @@ export {
 // ── Extractor ───────────────────────────────────────
 export {
   extractMemories,
+  ruleBasedExtractor,
   type ConversationTurn,
   type ExtractedMemory,
+  type Extractor,
 } from "./extractor.js";
 
 // ── Hooks ───────────────────────────────────────────
