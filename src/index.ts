@@ -78,6 +78,8 @@ export {
 // ── Recall (high-level) ─────────────────────────────
 export {
   recall,
+  blendScores,
+  isAdviceSeekingQuery,
   type RecallOptions,
   type RecallResult,
   getProfileSamples,
