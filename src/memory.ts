@@ -60,10 +60,37 @@ export function computeScore(input: ScoreInput): number {
   );
 }
 
+/**
+ * Outcome of a pairwise comparison between a new memory and an existing one.
+ *
+ *   flag       — different content, similarity > 0.85. Treat as a conflict:
+ *                either supersede the existing memory (for corrections or
+ *                higher-confidence inputs) or signal the caller that the new
+ *                memory is a near-duplicate worth reinforcing.
+ *   reinforce  — exact-match content OR 0.80 < similarity ≤ 0.85 with
+ *                different wording. Reinforce the existing memory (bump
+ *                access count / confidence) instead of storing a new row.
+ *   touch      — 0.60 ≤ similarity ≤ 0.80. Loosely related: the caller may
+ *                update lastAccessed to keep the memory warm, but should
+ *                not treat it as a duplicate.
+ *   none       — similarity < 0.60. Ignore.
+ */
+export type ConflictAction = "flag" | "reinforce" | "touch" | "none";
+
 export interface ConflictResult {
+  /**
+   * Backwards-compat alias for `action === "flag"`.
+   * @deprecated Prefer `action` — it distinguishes reinforce/touch from flag.
+   */
   isConflict: boolean;
+  action: ConflictAction;
   similarity: number;
 }
+
+// Tier thresholds. Ordered from strictest to loosest.
+const CONFLICT_FLAG_THRESHOLD = 0.85;
+const CONFLICT_REINFORCE_THRESHOLD = 0.80;
+const CONFLICT_TOUCH_THRESHOLD = 0.60;
 
 export function detectConflict(
   newContent: string,
@@ -71,12 +98,18 @@ export function detectConflict(
   similarity: number,
 ): ConflictResult {
   if (newContent === existingContent) {
-    return { isConflict: false, similarity };
+    return { action: "reinforce", isConflict: false, similarity };
   }
-  return {
-    isConflict: similarity > 0.85,
-    similarity,
-  };
+  if (similarity > CONFLICT_FLAG_THRESHOLD) {
+    return { action: "flag", isConflict: true, similarity };
+  }
+  if (similarity > CONFLICT_REINFORCE_THRESHOLD) {
+    return { action: "reinforce", isConflict: false, similarity };
+  }
+  if (similarity >= CONFLICT_TOUCH_THRESHOLD) {
+    return { action: "touch", isConflict: false, similarity };
+  }
+  return { action: "none", isConflict: false, similarity };
 }
 
 export interface RecallOptions {
@@ -151,13 +184,18 @@ export function recallMemories(
     candidates = candidates.filter((m) => m.confidence >= minConfidence);
   }
 
+  // Pre-compute expanded query terms once when we have a query. Used both
+  // by the keyword-only fallback below and by the per-memory keyword-boost
+  // branch in the scoring loop, so expansion helps even when embeddings are
+  // present but weak (e.g. out-of-distribution technical jargon).
+  const expandedTerms = query ? expandQuery(query) : null;
+
   // When query exists but no embeddings, filter to keyword matches only
-  if (query && !queryEmbedding) {
-    const expanded = expandQuery(query);
+  if (query && !queryEmbedding && expandedTerms) {
     const keywordMatches = candidates.filter((m) => {
       const lower = m.content.toLowerCase();
       const tagStr = m.tags.join(" ").toLowerCase();
-      return expanded.some(term => lower.includes(term) || tagStr.includes(term));
+      return expandedTerms.some(term => lower.includes(term) || tagStr.includes(term));
     });
     if (keywordMatches.length > 0) {
       candidates = keywordMatches;
@@ -171,9 +209,21 @@ export function recallMemories(
     if (queryEmbedding && memory.embedding) {
       relevance = Math.max(0, cosineSimilarity(queryEmbedding, memory.embedding));
       relevanceSource = "semantic";
-    } else if (query && memory.content.toLowerCase().includes(query.toLowerCase())) {
-      relevance = 0.75;
-      relevanceSource = "keyword";
+    } else if (query && expandedTerms) {
+      // Keyword-boost using expanded terms (synonyms + stems), not just the raw
+      // query. A tag match is a stronger signal than a body match, so we
+      // tier the relevance boost: 0.75 for exact body hit, 0.72 for tag or
+      // expanded-term body hit, 0.5 default when nothing matches.
+      const lower = memory.content.toLowerCase();
+      const tagStr = memory.tags.join(" ").toLowerCase();
+      const rawQuery = query.toLowerCase();
+      if (lower.includes(rawQuery)) {
+        relevance = 0.75;
+        relevanceSource = "keyword";
+      } else if (expandedTerms.some(term => lower.includes(term) || tagStr.includes(term))) {
+        relevance = 0.72;
+        relevanceSource = "keyword";
+      }
     }
 
     const importance = IMPORTANCE_WEIGHTS[memory.type] ?? 0.4;

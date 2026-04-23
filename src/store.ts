@@ -56,27 +56,39 @@ export async function storeMemory(
   if (embedding) {
     const existing = db.getRecentWithEmbeddings(loadConfig().retrieval.maxCandidates);
 
+    // Cap how many "touch"-tier (loosely related) memories we update per store
+    // to avoid O(N) writes when the new content is broadly similar to many
+    // existing rows. Flag/reinforce tiers are rare enough to not need a cap.
+    const MAX_TOUCH_UPDATES = 3;
+    let touched = 0;
+
     for (const mem of existing) {
       if (!mem.embedding) continue;
       const sim = cosineSimilarity(embedding, mem.embedding);
+      const conflict = detectConflict(content, mem.content, sim);
 
-      if (sim > 0.85) {
-        const conflict = detectConflict(content, mem.content, sim);
-        if (conflict.isConflict) {
-          const isSuperseding = type === "correction" || confidence > mem.confidence;
-          if (isSuperseding) {
-            db.expireMemory(mem.id);
-            db.snapshotVersion(mem.id, `superseded by new ${type} memory`);
-            break;
-          }
-          return {
-            action: "reinforced", id: mem.id, type, confidence: mem.confidence,
-            tags: mem.tags, total: db.getStats().total, reinforced: 0,
-          };
+      if (conflict.action === "flag") {
+        const isSuperseding = type === "correction" || confidence > mem.confidence;
+        if (isSuperseding) {
+          db.expireMemory(mem.id);
+          db.snapshotVersion(mem.id, `superseded by new ${type} memory`);
+          break;
         }
+        return {
+          action: "reinforced", id: mem.id, type, confidence: mem.confidence,
+          tags: mem.tags, total: db.getStats().total, reinforced: 0,
+        };
+      }
 
+      if (conflict.action === "reinforce") {
         db.touchAccess(mem.id);
         reinforced++;
+        continue;
+      }
+
+      if (conflict.action === "touch" && touched < MAX_TOUCH_UPDATES) {
+        db.touchAccess(mem.id);
+        touched++;
       }
     }
   }

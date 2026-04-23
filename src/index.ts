@@ -21,6 +21,7 @@ export {
   type Memory,
   type ScoreInput,
   computeScore,
+  type ConflictAction,
   type ConflictResult,
   detectConflict,
   type RecallOptions as MemoryRecallOptions,
@@ -193,6 +194,15 @@ export {
   type ConversationTurn,
   type ExtractedMemory,
 } from "./extractor.js";
+
+// ── Hooks ───────────────────────────────────────────
+export {
+  isHookEnabled,
+  runAutoExtract,
+  type HookEvent,
+  type AutoExtractOptions,
+  type AutoExtractResult,
+} from "./hooks.js";
 
 // ── Mirror ──────────────────────────────────────────
 export {
