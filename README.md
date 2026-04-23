@@ -16,7 +16,7 @@
 &nbsp;
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=for-the-badge&logo=typescript&logoColor=white)
 &nbsp;
-![Tests](https://img.shields.io/badge/tests-285%20passing-brightgreen?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-366%20passing-brightgreen?style=for-the-badge)
 
 <br/>
 
@@ -45,6 +45,20 @@
 </div>
 
 These are real numbers from a real run, on a real benchmark, with the package you can `npm install` right now. Reproducible: `npm run bench:longmemeval`. See **[BENCHMARKS.md](./BENCHMARKS.md)** for methodology, CI workflow, and how to add a new benchmark — every PR runs a cheap proof-of-life recall bench and posts results to the Actions step summary.
+
+---
+
+## ✨ New in 0.7.0
+
+- **Tiered conflict detection** — `detectConflict` now returns a `ConflictAction` (`flag` / `reinforce` / `touch` / `none`) based on similarity thresholds. `storeMemory` acts on all three tiers: conflicts at >0.85 supersede or reinforce, near-duplicates at >0.80 reinforce, loosely-related memories at ≥0.60 get their access-time bumped. The legacy `isConflict` boolean is preserved as a deprecated alias.
+- **Query expansion in the default recall path** — synonyms and stems (`auth → authentication`, `configuration → configura`) now drive per-memory keyword boosts on every recall, not just the no-embedding fallback. Exact body matches still outrank expanded-term matches.
+- **Wired `hooks.*` config** — new `isHookEnabled(event)` and `runAutoExtract(db, opts)`. The config keys (`enabled`, `captureToolUse`, `captureSessionEnd`, `autoExtractInterval`) now actually do something from within amem-core; the MCP wrapper gets a typed surface to gate against.
+- **Pluggable `Extractor` interface** — `runAutoExtract` accepts any `Extractor` (sync or async). Default is the built-in rule-based extractor; consumers can plug in LLM-backed or domain-specific ones without pulling an inference dependency into amem-core. Extractor failures are isolated — a throwing custom extractor returns an all-zero result with `extractorError` set instead of crashing the hook loop.
+- **`verifyTopology(db, { root, expireStale? })`** — topology memories ("Auth module is in `src/auth/`") get verified against the filesystem. Conservative path extraction (whitelisted source dirs and file extensions; ignores URLs and numeric fractions), read-only by default, idempotent across runs. With `expireStale: true`, stale rows are snapshot-versioned and expired so they stop surfacing in recall. No other MCP memory library in the space does this.
+- **Opt-in bi/cross-encoder blend for advice queries** — `RecallOptions.adviceRerankBlend` (default `0` = unchanged). Min-max normalizes bi-encoder and cross-encoder scores to `[0,1]` and blends by weight. Preserves the published 97.8% R@5 by default; validates higher blends via `bench/longmemeval` on your own data.
+- **CI-gated benchmarks** — `.github/workflows/bench.yml` runs the quick recall bench on every PR with a regression gate at R@5 ≥ 0.80 and posts R@K + per-query tables to the Actions step summary. `.github/workflows/bench-longmemeval.yml` runs the full 500-question LongMemEval on a nightly schedule and on demand. See **[BENCHMARKS.md](./BENCHMARKS.md)**.
+
+41 new tests (366 total). No breaking API changes — every new feature is additive or opt-in.
 
 ---
 
@@ -461,9 +475,16 @@ Nearest tickets, in priority order:
 - [x] **Wire cross-encoder reranking into default recall path** — shipped: R@1 46.6% → 64.9% (+18.3), R@5 91.0% → 94.6% (+3.6)
 - [x] **Skip rerank for advice-seeking queries** — shipped: preference R@5 recovered 93.3% → 96.7%, overall R@5 94.6% → 94.8%
 - [x] **Batched + int8-quantized cross-encoder** — shipped in v0.5.1: rerank 34.5ms → 10.3ms (3.3x), total recall 38.4ms → 13.9ms (2.8x), rank-corr 0.995 with fp32
+- [x] **Tiered conflict detection** — shipped in v0.7.0: `ConflictAction` flag/reinforce/touch/none, acted on in `storeMemory`
+- [x] **Query expansion on every recall** — shipped in v0.7.0: synonyms + stems in the default keyword-boost path, not just the no-embedding fallback
+- [x] **Hooks wired into amem-core** — shipped in v0.7.0: `isHookEnabled` + `runAutoExtract`; config keys finally mean something
+- [x] **Pluggable `Extractor` interface** — shipped in v0.7.0: `runAutoExtract(db, { extractor })` with a dependency-free rule-based default
+- [x] **`verifyTopology` filesystem check** — shipped in v0.7.0: stale topology memories surface automatically, optionally expired with a version snapshot
+- [x] **CI-gated recall benchmarks** — shipped in v0.7.0: `.github/workflows/bench.yml` gates every PR; `BENCHMARKS.md` pins methodology and numbers
 - [ ] **Time-aware ranking signal** — use `valid_from` / `valid_until` distance from query date to lift `temporal-reasoning` (currently weakest type at 89.4% R@5)
 - [ ] **Wire HNSW into the hot path** — currently exposed only via explicit `buildVectorIndex` calls
-- [ ] **Run LongMemEval-S and LongMemEval-M variants** — full haystack benchmarks, not just Oracle
+- [ ] **Team memory via git-sync** — shared SQLite via `scope` + `content_hash` + tiered conflict resolver (foundation shipped in v0.7.0)
+- [ ] **Run LongMemEval-M variant** — full haystack (~500 sessions/Q)
 - [ ] **PDPA / GDPR export** — `exportScope(scope)` for user-data takeout requests
 - [ ] **Schema versioning sentinel** — explicit `_schema_version` table for safer future migrations
 
