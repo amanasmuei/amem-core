@@ -44,7 +44,7 @@
 
 </div>
 
-These are real numbers from a real run, on a real benchmark, with the package you can `npm install` right now. Reproducible: `npm run bench:longmemeval`.
+These are real numbers from a real run, on a real benchmark, with the package you can `npm install` right now. Reproducible: `npm run bench:longmemeval`. See **[BENCHMARKS.md](./BENCHMARKS.md)** for methodology, CI workflow, and how to add a new benchmark — every PR runs a cheap proof-of-life recall bench and posts results to the Actions step summary.
 
 ---
 
